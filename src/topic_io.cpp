@@ -3,7 +3,7 @@
 #include "ExVectrCore/topic_subscribers.hpp"
 #include "ExVectrCore/print.hpp"
 
-#include "ExVectrHAL/io.hpp"
+#include "ExVectrHAL/digital_io.hpp"
 
 #include "ExVectrNetwork/physicallayers/topic_io.hpp"
 
@@ -15,8 +15,7 @@ namespace VCTR
 
         TopicIO::TopicIO() 
         {
-            receiveSubr_.setCallbackObject(this);
-            receiveSubr_.setCallbackFunction(&TopicIO::receiveItem);
+            receiveSubr_.setCallback(this, &TopicIO::receiveItem);
         }
 
         TopicIO::TopicIO(Core::Topic<const uint8_t*>& topic) : TopicIO()

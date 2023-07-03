@@ -7,7 +7,7 @@
 #include "ExVectrCore/topic_subscribers.hpp"
 #include "ExVectrCore/task_types.hpp"
 
-#include "ExVectrHAL/io.hpp"
+#include "ExVectrHAL/digital_io.hpp"
 
 namespace VCTR
 {
@@ -52,7 +52,7 @@ namespace VCTR
             size_t numBytesReceive_ = 0;
 
             ///@brief The physical layer that offers IO interface for reading/writing.
-            HAL::IO *physicalLayer_ = nullptr;
+            HAL::DigitalIO *physicalLayer_ = nullptr;
 
             ///@brief Topic where dataframes received by physical, are published as an object offering a list interface. This object must be copied by the subscribers.
             Core::Topic<Core::List<uint8_t>> receiveTopic_;
@@ -72,7 +72,7 @@ namespace VCTR
              * @note The physical layer is simply a medium to transfer raw data, this can be a LoRa device like SX1280 or UART, SPI etc.
              * @param physicalLayerDevice The object used as the physical layer.
              */
-            Datalink(HAL::IO &physicalLayerDevice);
+            Datalink(HAL::DigitalIO &physicalLayerDevice);
 
             /**
              * @brief The topic where the received data frames are published to.

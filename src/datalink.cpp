@@ -4,7 +4,7 @@
 #include "ExVectrCore/topic_subscribers.hpp"
 #include "ExVectrCore/print.hpp"
 
-#include "ExVectrHAL/io.hpp"
+#include "ExVectrHAL/digital_io.hpp"
 
 #include "ExVectrNetwork/datalink.hpp"
 
@@ -14,11 +14,10 @@ namespace VCTR
     namespace Net
     {
 
-        Datalink::Datalink(HAL::IO &physicalLayerDevice) : Task_Periodic("Datalink", 100*Core::MILLISECONDS)
+        Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice) : Task_Periodic("Datalink", 100*Core::MILLISECONDS)
         {
             physicalLayer_ = &physicalLayerDevice;
-            transmitSubr_.setCallbackObject(this);
-            transmitSubr_.setCallbackFunction(&Datalink::dataframeReceiveFunc);
+            transmitSubr_.setCallback(this, &Datalink::dataframeReceiveFunc);
         }
 
         Core::Topic<Core::List<uint8_t>> &Datalink::getReceiveTopic()
