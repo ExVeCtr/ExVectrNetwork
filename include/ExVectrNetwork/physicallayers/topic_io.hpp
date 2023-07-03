@@ -6,7 +6,7 @@
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 
-#include "ExVectrHAL/io.hpp"
+#include "ExVectrHAL/digital_io.hpp"
 
 namespace VCTR
 {
@@ -17,7 +17,7 @@ namespace VCTR
         /**
          * @brief A class implementing an IO interface using topics
          */
-        class TopicIO: public HAL::IO {
+        class TopicIO: public HAL::DigitalIO {
         private:
             
             /// Where the bytes are received
