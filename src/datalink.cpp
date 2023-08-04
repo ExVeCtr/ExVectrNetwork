@@ -44,6 +44,8 @@ namespace VCTR
         void Datalink::dataframeReceiveFunc(const Core::List<uint8_t> &item)
         {
 
+            //Core::printD("Received %d bytes from topic to send.\n", item.size());
+
             auto len = item.size();
             if (len > dataLinkMaxFrameLength) return; //Max frame length exceeded. Failure.
             if (len > transmitBuffer_.sizeMax() - transmitBuffer_.size() - 1) return; //Buffer overflow case. Failure.
@@ -72,7 +74,7 @@ namespace VCTR
             auto readLen = physicalLayer_->readable();
             if (readLen > 0) {
 
-                Core::printM("Read %d bytes.\n", readLen);
+                //Core::printD("Read %d bytes.\n", readLen);
 
                 if (!receiving_) {
 
@@ -86,12 +88,12 @@ namespace VCTR
                         physicalBlocked_ = true;
                         physicalBlockTimestamp_ = Core::NOW();
 
-                        Core::printM("Header block.\n");
+                        //Core::printD("Header block.\n");
 
                         break;
 
                     case PhysicalHeader::DATA : //Received data from channel. Block usage.
-                        //Core::printM("Header data with %d bytes.\n", buffer[1]);
+                        ////Core::printD("Header data with %d bytes.\n", buffer[1]);
                         transmitting_ = false;
                         physicalBlocked_ = true;
                         receiving_ = true;
@@ -100,7 +102,7 @@ namespace VCTR
                         physicalLayer_->readByte(data);
                         numBytesReceive_ = data;
 
-                        Core::printM("Header data with %d bytes.\n", numBytesReceive_);
+                        //Core::printD("Header data with %d bytes.\n", numBytesReceive_);
 
                         break;
 
@@ -112,12 +114,12 @@ namespace VCTR
                             receiveBuffer_.clear();
                         }
 
-                        Core::printM("Header free.\n");
+                        //Core::printD("Header free.\n");
 
                         break; 
                     
                     default:
-                        Core::printM("Header unknown.\n");
+                        //Core::printD("Header unknown.\n");
                         break;
                     }
 
@@ -136,7 +138,7 @@ namespace VCTR
 
                     if (numBytesReceive_ == 0) receiving_ = false;
 
-                    Core::printM("Received %d bytes.\n", size);
+                    //Core::printD("Received %d bytes.\n", size);
 
                 }
 
@@ -156,7 +158,7 @@ namespace VCTR
 
                     if (transmitting_ && numBytesTransmit_ == 0) { //Free medium if nothing more to write.
                         
-                        //Core::printM("Freeing medium!\n");
+                        //Core::printD("Freeing medium!\n");
 
                         transmitting_ = false;
                         physicalLayer_->writeByte(uint8_t(PhysicalHeader::FREE));
@@ -167,7 +169,7 @@ namespace VCTR
                         transmitBuffer_.removeFront();
                         transmitting_ = true;
 
-                        //Core::printM("Ready to send: %d bytes. Blocking medium...\n", numBytesTransmit_);
+                        //Core::printD("Ready to send: %d bytes. Blocking medium...\n", numBytesTransmit_);
 
                         physicalLayer_->writeByte(uint8_t(PhysicalHeader::BLOCK));
 
@@ -182,7 +184,7 @@ namespace VCTR
                         for (uint8_t i = 0; i < writeLen; i++) buffer[i + 2] = transmitBuffer_[i];
                         transmitBuffer_.removeFront(writeLen);
 
-                        //Core::printM("Sending: %d\n", writeLen);
+                        //Core::printD("Sending: %d\n", writeLen);
 
                         physicalLayer_->writeData(buffer, writeLen + 2);
 
