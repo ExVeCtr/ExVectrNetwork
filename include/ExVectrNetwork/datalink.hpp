@@ -72,7 +72,7 @@ namespace VCTR
              * @note The physical layer is simply a medium to transfer raw data, this can be a LoRa device like SX1280 or UART, SPI etc.
              * @param physicalLayerDevice The object used as the physical layer.
              */
-            Datalink(HAL::DigitalIO &physicalLayerDevice);
+            Datalink(HAL::DigitalIO &physicalLayerDevice, Core::Scheduler &scheduler = Core::getSystemScheduler());
 
             /**
              * @brief The topic where the received data frames are published to.

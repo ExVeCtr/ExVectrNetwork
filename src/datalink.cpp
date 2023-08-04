@@ -14,10 +14,11 @@ namespace VCTR
     namespace Net
     {
 
-        Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice) : Task_Periodic("Datalink", 100*Core::MILLISECONDS)
+        Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice, Core::Scheduler &scheduler) : Task_Periodic("Datalink", 100*Core::MILLISECONDS)
         {
             physicalLayer_ = &physicalLayerDevice;
             transmitSubr_.setCallback(this, &Datalink::dataframeReceiveFunc);
+            scheduler.addTask(*this);
         }
 
         Core::Topic<Core::List<uint8_t>> &Datalink::getReceiveTopic()
@@ -44,6 +45,7 @@ namespace VCTR
         {
 
             auto len = item.size();
+            if (len > dataLinkMaxFrameLength) return; //Max frame length exceeded. Failure.
             if (len > transmitBuffer_.sizeMax() - transmitBuffer_.size() - 1) return; //Buffer overflow case. Failure.
 
             transmitBuffer_.placeBack(len);
@@ -70,6 +72,8 @@ namespace VCTR
             auto readLen = physicalLayer_->readable();
             if (readLen > 0) {
 
+                Core::printM("Read %d bytes.\n", readLen);
+
                 if (!receiving_) {
 
                     uint8_t data;
@@ -81,6 +85,9 @@ namespace VCTR
                         transmitting_ = false;
                         physicalBlocked_ = true;
                         physicalBlockTimestamp_ = Core::NOW();
+
+                        Core::printM("Header block.\n");
+
                         break;
 
                     case PhysicalHeader::DATA : //Received data from channel. Block usage.
@@ -92,6 +99,9 @@ namespace VCTR
 
                         physicalLayer_->readByte(data);
                         numBytesReceive_ = data;
+
+                        Core::printM("Header data with %d bytes.\n", numBytesReceive_);
+
                         break;
 
                     case PhysicalHeader::FREE : //Channel has been freed up for use. If data was received, then publish it.
@@ -102,9 +112,12 @@ namespace VCTR
                             receiveBuffer_.clear();
                         }
 
+                        Core::printM("Header free.\n");
+
                         break; 
                     
                     default:
+                        Core::printM("Header unknown.\n");
                         break;
                     }
 
@@ -123,10 +136,12 @@ namespace VCTR
 
                     if (numBytesReceive_ == 0) receiving_ = false;
 
+                    Core::printM("Received %d bytes.\n", size);
+
                 }
 
             }
-
+            
             //Check if timeout was reached for physical access. In this case we can reset access.
             if (Core::NOW() - physicalBlockTimestamp_ > physicalReleaseTime_) {
                 physicalBlockTimestamp_ = Core::END_OF_TIME; //END_OF_TIME to stop this from triggering again.
