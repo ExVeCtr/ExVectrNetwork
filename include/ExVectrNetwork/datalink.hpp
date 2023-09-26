@@ -17,7 +17,7 @@ namespace VCTR
 
         /**
          * @brief   Datalink layer class. This class controls media access to a physical layer and allows any size data to be sent over a physical layer using the topic subscriber interface.
-         * @note    The physical layer must support ending a transfer.
+         *          
          */
         class Datalink : public Core::Task_Periodic
         {
@@ -30,8 +30,8 @@ namespace VCTR
 
             enum class PhysicalHeader {
                 BLOCK = 0,
-                FREE,
-                DATA
+                FREE =  1,
+                DATA =  2
             };
 
             ///@brief If the physicallayer is currently blocked. Cannot send during this time.
@@ -63,6 +63,10 @@ namespace VCTR
             Core::ListBuffer<uint8_t, dataLinkMaxFrameLength * 5> transmitBuffer_;
             ///@brief Buffer for data to transmit.
             Core::ListBuffer<uint8_t, dataLinkMaxFrameLength * 5> receiveBuffer_;
+
+
+            //Debugging byte counter
+            //size_t counter_ = 0;
             
 
         public:
@@ -97,7 +101,7 @@ namespace VCTR
              * @param transmitTopic What topic to stop transmitting frames from.
              * @return true if unsubscribed, false if already subscribed.
              */
-            void removeTransmitTopic(Core::Topic<Core::List<uint8_t>> &transmitTopic);
+            //void removeTransmitTopic(Core::Topic<Core::List<uint8_t>> &transmitTopic);
 
             /**
              * @brief Set the amount of time to wait for a blocked channel to become free.

@@ -1,4 +1,5 @@
 #include "ExVectrCore/list_buffer.hpp"
+#include "ExVectrCore/list_extern.hpp"
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 #include "ExVectrCore/print.hpp"
@@ -18,38 +19,42 @@ namespace VCTR
             receiveSubr_.setCallback(this, &TopicIO::receiveItem);
         }
 
-        TopicIO::TopicIO(Core::Topic<const uint8_t*>& topic) : TopicIO()
+        TopicIO::TopicIO(Core::Topic<const Core::List<uint8_t> &>& topic) : TopicIO()
         {
             receiveSubr_.subscribe(topic);
         }
 
-        void TopicIO::receiveItem(const uint8_t *const &item)
+        void TopicIO::receiveItem(const Core::List<uint8_t> &item)
         {
-            if (numReceiving_ == 0)
+
+            if (item.size() > receiveBuffer_.sizeMax() - receiveBuffer_.size())
             {
-                numReceiving_ = item[0];
+                LOG_MSG("Buffer overflow. Failure!\n");
+                return; // Buffer overflow case. Failure.
             }
-            else
+
+            VRBS_MSG("Received %d bytes from topic to send This: %d.\n", item.size(), this);
+
+            for (uint8_t i = 0; i < item.size(); i++)
             {
-                for (size_t i = 0; i < numReceiving_; i++)
-                    receiveBuffer_.placeBack(item[i], true);
-                numReceiving_ = 0;
+                receiveBuffer_.placeBack(item[i]);
             }
+
         }
 
-        void TopicIO::connectTopicIO(Core::Topic<const uint8_t*>& topic)
+        void TopicIO::setTopicIO(Core::Topic<const Core::List<uint8_t> &>& topic)
         {
             receiveSubr_.subscribe(topic);
         }
 
-        void TopicIO::disconnect(Core::Topic<const uint8_t*>& topic)
+        /*void TopicIO::disconnect(Core::Topic<const uint8_t*>& topic)
         {
-            receiveSubr_.unsubcribe(topic);
-        }
+            receiveSubr_.unsubscribe(topic);
+        }*/
 
         void TopicIO::disconnect()
         {
-            receiveSubr_.unsubcribe();
+            receiveSubr_.unsubscribe();
         }
 
         // ############# Below are the input functions ################
@@ -61,21 +66,25 @@ namespace VCTR
 
         bool TopicIO::setInputParam(HAL::IO_PARAM_t param, int32_t value)
         {
-            Core::printW("TopicIO setInputParam: Something attempted to change param values. This is not supported in topicIO! Param: %d, Value: %d\n", param, value);
+            LOG_MSG("TopicIO setInputParam: Something attempted to change param values. This is not supported in topicIO! Param: %d, Value: %d\n", param, value);
             return false;
         }
 
         size_t TopicIO::readable()
         {
+            //VRBS_MSG("Buffer front: %d, back: %d, size: %d, this: %d\n", receiveBuffer_.getFront(), receiveBuffer_.getBack(), receiveBuffer_.size(), this);
             return receiveBuffer_.size();
         }
 
         size_t TopicIO::readData(void *data, size_t size, bool endTransfer)
         {
+            
+            VRBS_MSG("Reading %d bytes from buffer. Buffer size: %d. This: %d\n", size, receiveBuffer_.size(), this);
+
             size_t i = 0;
             for (; i < size && receiveBuffer_.size() > 0; i++)
             {
-                receiveBuffer_.takeFront(((uint8_t *)data)[i]);
+                receiveBuffer_.takeFront(static_cast<uint8_t *>(data)[i]);
             }
             return i;
         }
@@ -89,11 +98,11 @@ namespace VCTR
 
         bool TopicIO::setOutputParam(HAL::IO_PARAM_t param, int32_t value)
         {
-            Core::printW("TopicIO setOutputParam: Something attempted to change param values. This is not supported in topicIO! Param: %d, Value: %d\n", param, value);
+            LOG_MSG("TopicIO setOutputParam: Something attempted to change param values. This is not supported in topicIO! Param: %d, Value: %d\n", param, value);
             return false;
         }
 
-        int32_t TopicIO::writable()
+        size_t TopicIO::writable()
         {
             return 255;
         }
@@ -101,22 +110,14 @@ namespace VCTR
         size_t TopicIO::writeData(const void *data, size_t size, bool endTransfer)
         {
 
-            size_t bytesSent = 0;
-            while (size > 0)
-            {
+            if (size > 255) // Too big to send
+                return 0;
 
-                uint8_t len = size;
-                if (len > 255)
-                    len = 255;
+            VRBS_MSG("Sending %d bytes through topic. This: %d\n", size, this);
 
-                receiveSubr_.publish(&len);
-                receiveSubr_.publish((uint8_t *)(size_t(data) + bytesSent));
+            receiveSubr_.publish(Core::ListExtern<uint8_t>((uint8_t*)data, size));
 
-                bytesSent += len;
-                size -= len;
-            }
-
-            return bytesSent;
+            return size;
         }
 
     }
