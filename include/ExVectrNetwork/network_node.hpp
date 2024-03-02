@@ -6,7 +6,7 @@
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 
-#include "ExVectrNetwork/datalink.hpp"
+#include "ExVectrNetwork/interfaces/datalink_interface.hpp"
 
 namespace VCTR
 {
@@ -101,7 +101,7 @@ namespace VCTR
              *
              * @param datalink The datalink layer to use.
              */
-            void setDatalink(Datalink &datalink);
+            void setDatalink(Datalink_Interface &datalink);
 
             /**
              * @brief Send a packet to the given destination address.

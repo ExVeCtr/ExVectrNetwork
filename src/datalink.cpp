@@ -17,28 +17,7 @@ namespace VCTR
         Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice, Core::Scheduler &scheduler) : Task_Periodic("Datalink", 1000 * Core::MILLISECONDS)
         {
             physicalLayer_ = &physicalLayerDevice;
-            transmitSubr_.setCallback(this, &Datalink::dataframeReceiveFunc);
             scheduler.addTask(*this);
-        }
-
-        Core::Topic<Core::List<uint8_t>> &Datalink::getReceiveTopic()
-        {
-            return receiveTopic_;
-        }
-
-        void Datalink::setTransmitTopic(Core::Topic<Core::List<uint8_t>> &transmitTopic)
-        {
-            transmitSubr_.subscribe(transmitTopic);
-        }
-
-        /*void Datalink::removeTransmitTopic(Core::Topic<Core::List<uint8_t>> &transmitTopic)
-        {
-            transmitSubr_.unsubscribe(transmitTopic);
-        }*/
-
-        void Datalink::removeTransmitTopic()
-        {
-            transmitSubr_.unsubscribe();
         }
 
         void Datalink::dataframeReceiveFunc(const Core::List<uint8_t> &item)

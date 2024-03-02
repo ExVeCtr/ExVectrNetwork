@@ -43,7 +43,7 @@ namespace VCTR
             return nodeAddress_;
         }
 
-        void NetworkNode::setDatalink(Datalink &datalink)
+        void NetworkNode::setDatalink(Datalink_Interface &datalink)
         {
             linkTransmitTopic_.unsubscribeAll(); // Remove previous datalink.
 

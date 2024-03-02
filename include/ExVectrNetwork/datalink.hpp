@@ -9,6 +9,8 @@
 
 #include "ExVectrHAL/digital_io.hpp"
 
+#include "ExVectrNetwork/interfaces/datalink_interface.hpp"
+
 namespace VCTR
 {
 
@@ -16,10 +18,10 @@ namespace VCTR
     {
 
         /**
-         * @brief   Datalink layer class. This class controls media access to a physical layer and allows any size data to be sent over a physical layer using the topic subscriber interface.
+         * @brief   Datalink layer class is a general implementation for use with any physical layer implementing the HAL::DigitalIO interface.
          *          
          */
-        class Datalink : public Core::Task_Periodic
+        class Datalink : public Datalink_Interface, public Core::Task_Periodic
         {
         public:
 
@@ -54,11 +56,6 @@ namespace VCTR
             ///@brief The physical layer that offers IO interface for reading/writing.
             HAL::DigitalIO *physicalLayer_ = nullptr;
 
-            ///@brief Topic where dataframes received by physical, are published as an object offering a list interface. This object must be copied by the subscribers.
-            Core::Topic<Core::List<uint8_t>> receiveTopic_;
-            ///@brief This subscriber receives dataframes that are to be sent over the physical layer.
-            Core::Callback_Subscriber<Core::List<uint8_t>, Datalink> transmitSubr_;
-
             ///@brief Buffer for data to transmit.
             Core::ListBuffer<uint8_t, dataLinkMaxFrameLength * 5> transmitBuffer_;
             ///@brief Buffer for data to transmit.
@@ -77,24 +74,6 @@ namespace VCTR
              * @param physicalLayerDevice The object used as the physical layer.
              */
             Datalink(HAL::DigitalIO &physicalLayerDevice, Core::Scheduler &scheduler = Core::getSystemScheduler());
-
-            /**
-             * @brief The topic where the received data frames are published to.
-             * @return the receive topic
-             */
-            Core::Topic<Core::List<uint8_t>> &getReceiveTopic();
-
-            /**
-             * @brief Sets the topic where data frames are published to, to be transmitted over the physical layer.
-             * @note This object subscribes to the given topic.
-             * @param transmitTopic The topic where dataframes to be transmitted are published to.
-             */
-            void setTransmitTopic(Core::Topic<Core::List<uint8_t>> &transmitTopic);
-
-            /**
-             * @brief Unsubscribes from all topics sending frames.
-             */
-            void removeTransmitTopic();
 
             /**
              * @brief Removes the given transmit topic from subscription.
@@ -117,7 +96,7 @@ namespace VCTR
              * @brief This function receives published dataframes from the transmit topic.
              * @param item Interface to dataframe containing list
              */
-            void dataframeReceiveFunc(const Core::List<uint8_t> &item);
+            void dataframeReceiveFunc(const Core::List<uint8_t> &item) override;
 
             /**
              * @brief Checks the IO if it has data to read.
