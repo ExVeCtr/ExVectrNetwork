@@ -32,13 +32,13 @@ namespace VCTR
             Datalink_Interface();
 
             /**
-             * @brief The topic where the received data frames are published to.
+             * @brief The topic where the received data frames are published to. (Datalink -> Network)
              * @return the receive topic
              */
             Core::Topic<Core::List<uint8_t>> &getReceiveTopic();
 
             /** 
-             * @brief Sets the topic where data frames are published to, to be transmitted over the physical layer.
+             * @brief Sets the topic where data frames are published to, to be transmitted over the physical layer. (Network -> Datalink)
              * @note This object subscribes to the given topic.
              * @param transmitTopic The topic where dataframes to be transmitted are published to.
              */
