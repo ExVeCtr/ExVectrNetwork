@@ -1,6 +1,7 @@
 # ExVectr Networking library
 This library allows for networking ability to connect devices.
 The network structure closely follows the ISO/OSI model.
+It is important to note that the current (probably will remain) implementation uses dynamic memory.
 Each layer has an interface class inside the interface folder. There are also general implementations inside the abstract folder. Theses are useful for getting a quick system running with minimal implementation work.
 ## Design:
 The physical layer is the actual data transfer method. Usually connecting two system over a bus like SPI, UART or could also be radio system like LoRa modules. It is assumed that sending data over this bus will broadcast it to all other connections.
