@@ -2,7 +2,7 @@
 #define EXVECTRNETWORK_H_
 
 #include "ExVectrNetwork/datalink.hpp"
-#include "ExVectrNetwork/transport.hpp"
+#include "ExVectrNetwork/transport_callback.hpp"
 #include "ExVectrNetwork/network_node.hpp"
 
 namespace VCTR
