@@ -8,6 +8,13 @@
 
 #include "ExVectrNetwork/datalink.hpp"
 
+
+/**
+ * The datalink works by first sending a block command to the physical layer. This will block the physical layer for a set amount of time. This way only one node can send at a time.
+ * Then the datalink will send the data in frames of the maximum size the physical layer supports and then send a free command to release the physical layer.
+ */
+
+
 namespace VCTR
 {
 

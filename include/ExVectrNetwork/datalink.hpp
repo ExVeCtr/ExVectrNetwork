@@ -26,7 +26,10 @@ namespace VCTR
         public:
 
             ///@brief Maximum length a data frame can be.
-            static constexpr size_t dataLinkMaxFrameLength = 200; 
+            static constexpr size_t dataLinkMaxFrameLength = 230; 
+            ///@brief Maximum number of frames that can be stored in the buffer.
+            static constexpr size_t dataLinkBufferFrameLength = 5;
+
 
         private:
 
