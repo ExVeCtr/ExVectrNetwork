@@ -1,6 +1,4 @@
-#ifndef EXVECTRNETWORK_NETWORK_H_
-#define EXVECTRNETWORK_NETWORK_H_
-
+#include "ExVectrCore/cyclic_checksum.hpp"
 #include "ExVectrCore/list.hpp"
 #include "ExVectrCore/list_static.hpp"
 #include "ExVectrCore/topic.hpp"
@@ -8,9 +6,8 @@
 #include "ExVectrCore/print.hpp"
 
 #include "ExVectrNetwork/datalink.hpp"
+#include "ExVectrNetwork/structs/network_packet.hpp"
 #include "ExVectrNetwork/network_node.hpp"
-
-#define EXVECTR_DEBUG_VRBS_ENABLE
 
 namespace VCTR
 {
@@ -18,10 +15,8 @@ namespace VCTR
     namespace Net
     {
 
-        NetworkNode::NetworkNode(uint16_t nodeAddress)
+        NetworkNode::NetworkNode(uint16_t nodeAddress) : Network_Interface(nodeAddress)
         {
-
-            nodeAddress_ = nodeAddress;
 
             transmitTopicSubr_.setCallback(this, &NetworkNode::sendPacket);
             transmitTopicSubr_.subscribe(transmitTopic_);
@@ -29,18 +24,13 @@ namespace VCTR
             linkReceiveSubr_.setCallback(this, &NetworkNode::receivePacket);
         }
 
+        NetworkNode::NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink) : NetworkNode(nodeAddress)
+        {
+            setDatalink(datalink);
+        }
+
         NetworkNode::~NetworkNode()
         {
-        }
-
-        void NetworkNode::setNodeAddress(uint16_t nodeAddress)
-        {
-            nodeAddress_ = nodeAddress;
-        }
-
-        uint16_t NetworkNode::getNodeAddress() const
-        {
-            return nodeAddress_;
         }
 
         void NetworkNode::setDatalink(Datalink_Interface &datalink)
@@ -67,7 +57,7 @@ namespace VCTR
             }
 
             Core::ListArray<uint8_t> packetBytes;
-            packetBytes.setSize(packet.payloadLength + 8);
+            packetBytes.setSize(packet.payload.size() + 8);
             if (!packPacket(packetSend, packetBytes))
             {
                 LOG_MSG("Failed to pack packet! \n");
@@ -82,16 +72,6 @@ namespace VCTR
             }*/
             //LOG_MSG("\n");
             linkTransmitTopic_.publish(packetBytes);
-        }
-
-        Core::Topic<NetworkPacket> &NetworkNode::getTransmitTopic()
-        {
-            return transmitTopic_;
-        }
-
-        Core::Topic<NetworkPacket> &NetworkNode::getReceiveTopic()
-        {
-            return receiveTopic_;
         }
 
         void NetworkNode::receivePacket(const Core::List<uint8_t> &data)
@@ -109,17 +89,18 @@ namespace VCTR
             NetworkPacket packet;
             if (!unpackPacket(packet, data))
             {
+                VRBS_MSG("Failed to unpack packet! \n");
                 return;
             }
 
             if (packet.dstAddress == nodeAddress_) // If this packet is for this node, publish it directly to the receive topic.
             {
+                //Decrement hops if not zero
+                if (packet.hops > 0)
+                    packet.hops--;
+                
+                //Send packet to receive topic (Network -> Transport)
                 receiveTopic_.publish(packet);
-            }
-            else if (packet.dstAddress == 0xFFFF) // Broadcast packet or we are not addressed. Publish to receive topic and route.
-            {
-                receiveTopic_.publish(packet);
-                routePacket(packet);
             }
         }
 
@@ -133,37 +114,34 @@ namespace VCTR
             packet.dstAddress = (data[2] << 8) | data[3];
             packet.srcAddress = (data[4] << 8) | data[5];
             // Byte 6 is checksum
-            packet.payloadLength = data[7];
+            uint8_t payloadSize = data[7];
 
-            if (data.size() != packet.payloadLength + 8)
+            VRBS_MSG("Packet type: %d, Hops: %d, Dst: %d, Src: %d, Payload size: %d.\n", packet.type, packet.hops, packet.dstAddress, packet.srcAddress, payloadSize);
+
+            if (data.size() != payloadSize + 8)
             {
-                LOG_MSG("Data buffer wrong size! \n");
+                LOG_MSG("Data buffer wrong size! Packet size: %d, Data size: %d \n", packet.payload.size() + 8, data.size());
                 return false;
             }
 
-            for (size_t i = 0; i < packet.payloadLength; i++)
+            packet.payload.clear();
+            for (size_t i = 0; i < payloadSize; i++)
             {
-                packet.payload[i] = data[8 + i];
+                packet.payload.placeBack(data[8 + i]);
             }
 
             // Calculate checksum
-            uint8_t checksum = 0;
-            checksum += uint8_t(packet.type);
-            checksum += packet.hops;
-            checksum += packet.dstAddress >> 8;
-            checksum += packet.dstAddress & 0xFF;
-            checksum += packet.srcAddress >> 8;
-            checksum += packet.srcAddress & 0xFF;
-            checksum += packet.payloadLength;
-            checksum += networkVersion;
-            for (size_t i = 0; i < packet.payloadLength; i++)
+            uint8_t checksum = 0;//Core::computeCrc(data, 0);
+            for (size_t i = 0; i < data.size(); i++)
             {
-                checksum += packet.payload[i];
+                if (i == 6) // Skip checksum byte
+                    continue;
+                checksum += data[i];
             }
 
             if (checksum != data[6])
             {
-                LOG_MSG("Checksum failed! Expected: %d, Is: %d \n", checksum, data[6]);
+                LOG_MSG("Checksum failed! Expected: %d, Is: %d \n", data[6], checksum);
                 return false;
             }
 
@@ -173,8 +151,8 @@ namespace VCTR
         bool NetworkNode::packPacket(const NetworkPacket &packet, Core::List<uint8_t> &data)
         {
 
-            VRBS_MSG("Packing packet. Payload len: %d.\n", packet.payloadLength);
-            if (data.size() < packet.payloadLength + 8)
+            VRBS_MSG("Packing packet. Payload len: %d.\n", packet.payload.size());
+            if (data.size() < packet.payload.size() + 8)
             {
                 LOG_MSG("Data buffer too small! \n");
                 return false;
@@ -187,27 +165,19 @@ namespace VCTR
             data[4] = packet.srcAddress >> 8;
             data[5] = packet.srcAddress & 0xFF;
             // Byte 6 is checksum
-            data[7] = packet.payloadLength;
+            data[6] = 0;
+            data[7] = packet.payload.size();
 
-            for (size_t i = 0; i < packet.payloadLength; i++)
+            for (size_t i = 0; i < packet.payload.size(); i++)
             {
                 data[8 + i] = packet.payload[i];
             }
 
             // Calculate checksum
-            uint8_t checksum = 0;
-            checksum += uint8_t(packet.type);
-            checksum += packet.hops;
-            checksum += packet.dstAddress >> 8;
-            checksum += packet.dstAddress & 0xFF;
-            checksum += packet.srcAddress >> 8;
-            checksum += packet.srcAddress & 0xFF;
-            checksum += packet.payloadLength;
-            checksum += networkVersion;
-
-            for (size_t i = 0; i < packet.payloadLength; i++)
+            uint8_t checksum = 0;//Core::computeCrc(data, 0);
+            for (size_t i = 0; i < data.size(); i++)
             {
-                checksum += packet.payload[i];
+                checksum += data[i];
             }
 
             data[6] = checksum;
@@ -215,12 +185,6 @@ namespace VCTR
             return true;
         }
 
-        void NetworkNode::routePacket(const NetworkPacket &packet)
-        {
-        }
-
     }
 
 }
-
-#endif
