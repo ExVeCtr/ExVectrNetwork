@@ -93,7 +93,7 @@ namespace VCTR
                 return;
             }
 
-            if (packet.dstAddress == nodeAddress_) // If this packet is for this node, publish it directly to the receive topic.
+            if (packet.dstAddress == nodeAddress_ || packet.dstAddress == UINT16_MAX) // If this packet is for this node, publish it directly to the receive topic.
             {
                 //Decrement hops if not zero
                 if (packet.hops > 0)
