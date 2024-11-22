@@ -103,6 +103,18 @@ namespace VCTR
             void setNetworkNode(Network_Interface &node);
 
             /**
+             * @brief   Set the port to use for sending and receiving packets.
+             * @param port The port to use.
+             */
+            void setPort(uint16_t port) {
+                port_ = port;
+            }
+
+            uint16_t getPort() {
+                return port_;
+            }
+
+            /**
              * @brief   Sends the given data to the given address and port.
              * @param data The data to send and the destination address and port. The source address and port will be added automatically.
              */
