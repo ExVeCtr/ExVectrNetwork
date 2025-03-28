@@ -17,6 +17,7 @@ namespace VCTR
 
         /**
          * @brief Interface for the datalink layer. Inhereting classes must implement the dataframeReceiveFunc function.
+         * @note The datalink class is responsible for receiving dataframes from the physical layer and sending dataframes to the physical layer.
          */
         class Datalink_Interface
         {
