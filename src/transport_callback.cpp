@@ -194,7 +194,7 @@ namespace VCTR
                     // Find the next segment
                     for (size_t i = 0; i < segmentBuffer_.size(); i++) {
                         NetworkPacket& segment = segmentBuffer_[i];
-                        uint16_t order = (segment.payload(-4) << 8) | segment.payload(-3);
+                        //uint16_t order = (segment.payload(-4) << 8) | segment.payload(-3);
                         //LOG_MSG("Segment %d. \n", order);
                         if (order == curSeg) {
                             //LOG_MSG("Found segment %d. \n", order);

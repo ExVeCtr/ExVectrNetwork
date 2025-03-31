@@ -118,7 +118,7 @@ namespace VCTR
 
             VRBS_MSG("Packet type: %d, Hops: %d, Dst: %d, Src: %d, Payload size: %d.\n", packet.type, packet.hops, packet.dstAddress, packet.srcAddress, payloadSize);
 
-            if (data.size() != payloadSize + 8)
+            if (data.size() != size_t(payloadSize + 8))
             {
                 LOG_MSG("Data buffer wrong size! Packet size: %d, Data size: %d \n", packet.payload.size() + 8, data.size());
                 return false;
