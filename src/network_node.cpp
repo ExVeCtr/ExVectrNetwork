@@ -15,23 +15,32 @@ namespace VCTR
     namespace Net
     {
 
-        NetworkNode::NetworkNode(uint16_t nodeAddress) : Network_Interface(nodeAddress)
+        NetworkNode::NetworkNode(uint16_t nodeAddress, int64_t disconnectTimeout) : 
+            Network_Interface(nodeAddress),
+            Task_Periodic("NetworkNode", 100 * Core::MILLISECONDS) // 10Hz
         {
 
             transmitTopicSubr_.setCallback(this, &NetworkNode::sendPacket);
             transmitTopicSubr_.subscribe(transmitTopic_);
 
             linkReceiveSubr_.setCallback(this, &NetworkNode::receivePacket);
+
+            timeoutInterval_ = disconnectTimeout;
+            sendInterval_ = timeoutInterval_/4; // Send a heartbeat packet every 1/4 of the timeout interval.
+
+            Core::getSystemScheduler().addTask(*this);
+
         }
 
-        NetworkNode::NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink) : NetworkNode(nodeAddress)
+        NetworkNode::NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink, int64_t disconnectTimeout) : 
+            NetworkNode(nodeAddress, disconnectTimeout)
         {
             setDatalink(datalink);
         }
 
-        NetworkNode::~NetworkNode()
-        {
-        }
+        //NetworkNode::~NetworkNode()
+        //{
+        //}
 
         void NetworkNode::setDatalink(Datalink_Interface &datalink)
         {
@@ -39,6 +48,37 @@ namespace VCTR
 
             linkReceiveSubr_.subscribe(datalink.getReceiveTopic()); // Subscribe to new datalink.
             datalink.setTransmitTopic(linkTransmitTopic_);
+        }
+
+        bool NetworkNode::isNodeReachable(uint16_t nodeAddress) {
+            for (int i = 0; i < nodeList_.size(); i++) {
+                if (nodeList_[i].nodeAddress == nodeAddress) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void NetworkNode::taskThread() {
+
+            if (Core::NOW() - lastSend_ > sendInterval_) {
+                lastSend_ = Core::NOW();
+                NetworkPacket packet;
+                packet.type = NetworkPacketType::HEARTBEAT;
+                packet.hops = 0;
+                packet.dstAddress = 0xFFFF; // Broadcast to all nodes.
+                packet.srcAddress = nodeAddress_;
+                sendPacket(packet);
+            }
+
+            // Check if any nodes are unreachable
+            for (int i = 0; i < nodeList_.size(); i++) {
+                if (Core::NOW() - nodeList_[i].lastSeen > timeoutInterval_) {
+                    nodeList_.removeAtIndex(i);
+                    i--;
+                }
+            }
+
         }
 
         void NetworkNode::sendPacket(const NetworkPacket &packet)
@@ -65,6 +105,8 @@ namespace VCTR
             }
 
             linkTransmitTopic_.publish(packetBytes);
+            lastSend_ = Core::NOW(); // Update the last send time.
+
         }
 
         void NetworkNode::receivePacket(const Core::List<uint8_t> &data)
@@ -72,13 +114,7 @@ namespace VCTR
 
             VRBS_MSG("Received a packet. Size: %d Pointer: %d\n", data.size(), this);
 
-            //Print the contents of the packet array
-            /*VRBS_MSG("Receive Packet bytes: \n");
-            for (size_t i = 0; i < data.size(); i++)
-            {
-                VRBS_MSG("%d, %d \n", i, data[i]);
-            }*/
-
+            //Convert the data to a packet
             NetworkPacket packet;
             if (!unpackPacket(packet, data))
             {
@@ -86,6 +122,26 @@ namespace VCTR
                 return;
             }
 
+            //Update the reachable nodes list
+            bool found = false;
+            for (int i = 0; i < nodeList_.size(); i++)
+            {
+                if (nodeList_[i].nodeAddress == packet.srcAddress)
+                {
+                    nodeList_[i].lastSeen = Core::NOW();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) // // If the node is not in the list, add it
+            {
+                NodeInfo nodeInfo;
+                nodeInfo.nodeAddress = packet.srcAddress;
+                nodeInfo.lastSeen = Core::NOW();
+                nodeList_.appendIfNotInListArray(nodeInfo);
+            }
+
+            //Check if the node is for us and publish it to the receive topic
             if (packet.dstAddress == nodeAddress_ || packet.dstAddress == UINT16_MAX) // If this packet is for this node, publish it directly to the receive topic.
             {
                 //Decrement hops if not zero
