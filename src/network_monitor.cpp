@@ -16,11 +16,12 @@ namespace VCTR
     {
 
         
-        NetworkMonitor::NetworkMonitor(Net::Network_Interface &networkInterface, int64_t sendInterval = 0.5 * Core::SECONDS, int64_t timeoutInterval = 2 * Core::SECONDS) :
+        NetworkMonitor::NetworkMonitor(Net::Network_Interface &networkInterface, int64_t sendInterval, int64_t timeoutInterval) :
             Core::Task_Periodic("Network Monitor", sendInterval)
         {
             transmitTopicPub_.subscribe(networkInterface.getTransmitTopic());
             receiveSubr_.subscribe(networkInterface.getReceiveTopic());
+            Core::getSystemScheduler().addTask(*this);
         }
 
         void NetworkMonitor::setSendInterval(int64_t interval) {
@@ -63,8 +64,7 @@ namespace VCTR
             packet.type = NetworkPacketType::HEARTBEAT;
             packet.hops = 1;
             packet.dstAddress = 0xFFFF; // Broadcast
-            packet.payload.clear();
-
+            packet.payload.placeBack(5); //Dummy payload
             transmitTopicPub_.publish(packet); // Send the packet
 
             // Handle received packets
