@@ -48,7 +48,7 @@ namespace VCTR
 
             auto packetSend = packet;
             packetSend.srcAddress = nodeAddress_;
-            packetSend.type = NetworkPacketType::DATA;
+            //packetSend.type = NetworkPacketType::DATA;
 
             if (nodeAddress_ == packetSend.dstAddress)
             { // If this packet is for this node, publish it directly to the receive topic.
@@ -64,13 +64,6 @@ namespace VCTR
                 return;
             }
 
-            //Print the contents of the packet array
-            /*VRBS_MSG("Send Packet bytes: \n");
-            for (size_t i = 0; i < packetBytes.size(); i++)
-            {
-                VRBS_MSG("%d, %d \n", i, packetBytes[i]);
-            }*/
-            //LOG_MSG("\n");
             linkTransmitTopic_.publish(packetBytes);
         }
 
