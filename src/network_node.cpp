@@ -26,7 +26,7 @@ namespace VCTR
             linkReceiveSubr_.setCallback(this, &NetworkNode::receivePacket);
 
             timeoutInterval_ = disconnectTimeout;
-            sendInterval_ = timeoutInterval_/4; // Send a heartbeat packet every 1/4 of the timeout interval.
+            sendInterval_ = timeoutInterval_/10; // Send a heartbeat packet every 1/5 of the timeout interval.
 
             Core::getSystemScheduler().addTask(*this);
 
@@ -68,6 +68,7 @@ namespace VCTR
                 packet.hops = 0;
                 packet.dstAddress = 0xFFFF; // Broadcast to all nodes.
                 packet.srcAddress = nodeAddress_;
+                packet.payload.placeBack(0); // Empty payload.
                 sendPacket(packet);
             }
 
@@ -86,6 +87,11 @@ namespace VCTR
 
             VRBS_MSG("Sending Packet! Pointer: %d\n", this);
 
+            if (packet.payload.size() == 0) {
+                LOG_MSG("Packet empty! \n");
+                return;
+            }
+
             auto packetSend = packet;
             packetSend.srcAddress = nodeAddress_;
             //packetSend.type = NetworkPacketType::DATA;
@@ -95,6 +101,8 @@ namespace VCTR
                 receiveTopic_.publish(packet);
                 return;
             }
+
+            //LOG_MSG("Packet input size: %d, Packet copy size: %d\n", packet.payload.size(), packetSend.payload.size());
 
             Core::ListArray<uint8_t> packetBytes;
             packetBytes.setSize(packet.payload.size() + 8);
@@ -200,7 +208,7 @@ namespace VCTR
         bool NetworkNode::packPacket(const NetworkPacket &packet, Core::List<uint8_t> &data)
         {
 
-            VRBS_MSG("Packing packet. Payload len: %d.\n", packet.payload.size());
+            LOG_MSG("Packing packet. Payload len: %d.\n", packet.payload.size());
             if (data.size() < packet.payload.size() + 8)
             {
                 LOG_MSG("Data buffer too small! \n");
