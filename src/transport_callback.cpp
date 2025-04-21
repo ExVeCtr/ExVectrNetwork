@@ -73,8 +73,8 @@ namespace VCTR
 
             // Create the first packet (Info packet)
             NetworkPacket packet;
-            packet.dstAddress = data.dstAddress;
-            packet.srcAddress = port_;
+            //packet.dstAddress = data.dstAddress;
+            //packet.srcAddress = port_;
 
             packet.payload.placeBack(numSegments >> 8);
             packet.payload.placeBack(numSegments & 0xFF);
@@ -110,7 +110,7 @@ namespace VCTR
 
         void TransportCallback::sendSegment(NetworkPacket& segment, uint16_t order, uint16_t dstAddress, uint16_t dstPort, uint8_t id) {
                 
-                // Create the packet
+                // Add the destination address.
                 segment.dstAddress = dstAddress;
     
                 // Add segment data [srcPortHigh, srcPortLow, dstPortHigh, dstPortLow, ID, transportIdentifier]
@@ -133,9 +133,15 @@ namespace VCTR
         void TransportCallback::receivePacketCallback(const NetworkPacket &packet) {
 
             VRBS_MSG("Received packet. len %d. \n", packet.payload.size());
+
+            if (packet.payload.size() < 8) { // Packet is too small. Discard.
+                LOG_MSG("Received packet is too small. Its %d bytes long \n", packet.payload.size());
+                return;
+            }
+
             
             // Check if packet is a transport packet and correct version
-            uint16_t identifier = packet.payload(-1);
+            uint8_t identifier = packet.payload(-1);
             if (identifier != transportSimpleVersion + transportSimpleID) {
                 LOG_MSG("Received packet is not a transport packet. Identifier: %d. \n", int(identifier));
                 return;
@@ -157,20 +163,32 @@ namespace VCTR
 
             if (id != rcvID_) { // We are receiving new data. Discard old data and restart.
 
+                uint16_t numSegments = (packet.payload[0] << 8) | packet.payload[1];
+                uint16_t numBytes = (packet.payload[2] << 8) | packet.payload[3];
+                uint16_t checksum = packet.payload[4];
+
+                uint8_t rcvID = id;
+
+                if (numSegments == 0 || numBytes == 0 || numBytes < numSegments) { // No data to receive or something is wrong with the data. Discard.
+                    LOG_MSG("Received something wierd. Will be discarded. ID: %d, Segments: %d, Bytes: %d, Checksum: %d. \n", rcvID, numSegments, numBytes, checksum);
+                    //segmentBuffer_.clear();
+                    //curSegment_ = 0;
+                    //numSegments_ = numBytes_ = checksum_ = 0;
+                    return;
+                }
+
                 segmentBuffer_.clear();
                 curSegment_ = 0;
 
-                numSegments_ = (packet.payload[0] << 8) | packet.payload[1];
-                numBytes_ = (packet.payload[2] << 8) | packet.payload[3];
-                checksum_ = packet.payload[4];
-
-                rcvID_ = id;
+                numSegments_ = numSegments;
+                numBytes_ = numBytes;
+                checksum_ = checksum;
+                rcvID_ = rcvID;
 
                 VRBS_MSG("Received new data. Segments: %d, Bytes: %d, Checksum: %d. \n", numSegments_, numBytes_, checksum_);
 
                 return;
             }
-
             VRBS_MSG("Received data segment %d. \n", order);
 
             // Place the segment into the buffer.
