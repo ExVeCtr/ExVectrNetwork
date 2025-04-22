@@ -149,6 +149,11 @@ namespace VCTR
                 nodeList_.appendIfNotInListArray(nodeInfo);
             }
 
+            if (packet.type == NetworkPacketType::HEARTBEAT)
+            {
+                return; // Ignore heartbeat packets.
+            }
+
             //Check if the node is for us and publish it to the receive topic
             if (packet.dstAddress == nodeAddress_ || packet.dstAddress == UINT16_MAX) // If this packet is for this node, publish it directly to the receive topic.
             {
