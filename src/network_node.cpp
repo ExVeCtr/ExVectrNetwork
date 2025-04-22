@@ -213,7 +213,7 @@ namespace VCTR
         bool NetworkNode::packPacket(const NetworkPacket &packet, Core::List<uint8_t> &data)
         {
 
-            LOG_MSG("Packing packet. Payload len: %d.\n", packet.payload.size());
+            VRBS_MSG("Packing packet. Payload len: %d.\n", packet.payload.size());
             if (data.size() < packet.payload.size() + 8)
             {
                 LOG_MSG("Data buffer too small! \n");
