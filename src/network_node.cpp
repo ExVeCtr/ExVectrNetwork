@@ -51,7 +51,7 @@ namespace VCTR
         }
 
         bool NetworkNode::isNodeReachable(uint16_t nodeAddress) {
-            for (int i = 0; i < nodeList_.size(); i++) {
+            for (size_t i = 0; i < nodeList_.size(); i++) {
                 if (nodeList_[i].nodeAddress == nodeAddress) {
                     return true;
                 }
@@ -73,7 +73,7 @@ namespace VCTR
             }
 
             // Check if any nodes are unreachable
-            for (int i = 0; i < nodeList_.size(); i++) {
+            for (size_t i = 0; i < nodeList_.size(); i++) {
                 if (Core::NOW() - nodeList_[i].lastSeen > timeoutInterval_) {
                     nodeList_.removeAtIndex(i);
                     i--;
@@ -132,7 +132,7 @@ namespace VCTR
 
             //Update the reachable nodes list
             bool found = false;
-            for (int i = 0; i < nodeList_.size(); i++)
+            for (size_t i = 0; i < nodeList_.size(); i++)
             {
                 if (nodeList_[i].nodeAddress == packet.srcAddress)
                 {
