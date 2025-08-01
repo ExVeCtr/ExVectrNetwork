@@ -1,8 +1,8 @@
 #include "ExVectrCore/time_definitions.hpp"
+#include "ExVectrCore/print.hpp"
 #include "ExVectrCore/list.hpp"
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
-#include "ExVectrCore/print.hpp"
 
 #include "ExVectrHAL/digital_io.hpp"
 
@@ -28,7 +28,6 @@ namespace VCTR
         {
             transmitSubr_.subscribe(transmitTopic);
         }
-
 
         void Datalink_Interface::removeTransmitTopic()
         {

@@ -1,9 +1,9 @@
 #include "ExVectrCore/cyclic_checksum.hpp"
+#include "ExVectrCore/print.hpp"
 #include "ExVectrCore/list.hpp"
 #include "ExVectrCore/list_static.hpp"
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
-#include "ExVectrCore/print.hpp"
 
 #include "ExVectrNetwork/datalink.hpp"
 #include "ExVectrNetwork/structs/network_packet.hpp"
@@ -15,9 +15,8 @@ namespace VCTR
     namespace Net
     {
 
-        NetworkNode::NetworkNode(uint16_t nodeAddress, int64_t disconnectTimeout) : 
-            Network_Interface(nodeAddress),
-            Task_Periodic("NetworkNode", 100 * Core::MILLISECONDS) // 10Hz
+        NetworkNode::NetworkNode(uint16_t nodeAddress, int64_t disconnectTimeout) : Network_Interface(nodeAddress),
+                                                                                    Task_Periodic("NetworkNode", 100 * Core::MILLISECONDS) // 10Hz
         {
 
             transmitTopicSubr_.setCallback(this, &NetworkNode::sendPacket);
@@ -26,21 +25,19 @@ namespace VCTR
             linkReceiveSubr_.setCallback(this, &NetworkNode::receivePacket);
 
             timeoutInterval_ = disconnectTimeout;
-            sendInterval_ = timeoutInterval_/10; // Send a heartbeat packet every 1/5 of the timeout interval.
+            sendInterval_ = timeoutInterval_ / 10; // Send a heartbeat packet every 1/5 of the timeout interval.
 
             Core::getSystemScheduler().addTask(*this);
-
         }
 
-        NetworkNode::NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink, int64_t disconnectTimeout) : 
-            NetworkNode(nodeAddress, disconnectTimeout)
+        NetworkNode::NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink, int64_t disconnectTimeout) : NetworkNode(nodeAddress, disconnectTimeout)
         {
             setDatalink(datalink);
         }
 
-        //NetworkNode::~NetworkNode()
+        // NetworkNode::~NetworkNode()
         //{
-        //}
+        // }
 
         void NetworkNode::setDatalink(Datalink_Interface &datalink)
         {
@@ -50,18 +47,23 @@ namespace VCTR
             datalink.setTransmitTopic(linkTransmitTopic_);
         }
 
-        bool NetworkNode::isNodeReachable(uint16_t nodeAddress) {
-            for (size_t i = 0; i < nodeList_.size(); i++) {
-                if (nodeList_[i].nodeAddress == nodeAddress) {
+        bool NetworkNode::isNodeReachable(uint16_t nodeAddress)
+        {
+            for (size_t i = 0; i < nodeList_.size(); i++)
+            {
+                if (nodeList_[i].nodeAddress == nodeAddress)
+                {
                     return true;
                 }
             }
             return false;
         }
 
-        void NetworkNode::taskThread() {
+        void NetworkNode::taskThread()
+        {
 
-            if (Core::NOW() - lastSend_ > sendInterval_) {
+            if (Core::NOW() - lastSend_ > sendInterval_)
+            {
                 lastSend_ = Core::NOW();
                 NetworkPacket packet;
                 packet.type = NetworkPacketType::HEARTBEAT;
@@ -73,28 +75,30 @@ namespace VCTR
             }
 
             // Check if any nodes are unreachable
-            for (size_t i = 0; i < nodeList_.size(); i++) {
-                if (Core::NOW() - nodeList_[i].lastSeen > timeoutInterval_) {
+            for (size_t i = 0; i < nodeList_.size(); i++)
+            {
+                if (Core::NOW() - nodeList_[i].lastSeen > timeoutInterval_)
+                {
                     nodeList_.removeAtIndex(i);
                     i--;
                 }
             }
-
         }
 
         void NetworkNode::sendPacket(const NetworkPacket &packet)
-        {   
+        {
 
             VRBS_MSG("Sending Packet! Pointer: %d\n", this);
 
-            if (packet.payload.size() == 0) {
+            if (packet.payload.size() == 0)
+            {
                 LOG_MSG("Packet empty! \n");
                 return;
             }
 
             auto packetSend = packet;
             packetSend.srcAddress = nodeAddress_;
-            //packetSend.type = NetworkPacketType::DATA;
+            // packetSend.type = NetworkPacketType::DATA;
 
             if (nodeAddress_ == packetSend.dstAddress)
             { // If this packet is for this node, publish it directly to the receive topic.
@@ -102,7 +106,7 @@ namespace VCTR
                 return;
             }
 
-            //LOG_MSG("Packet input size: %d, Packet copy size: %d\n", packet.payload.size(), packetSend.payload.size());
+            // LOG_MSG("Packet input size: %d, Packet copy size: %d\n", packet.payload.size(), packetSend.payload.size());
 
             Core::ListArray<uint8_t> packetBytes;
             packetBytes.setSize(packet.payload.size() + 8);
@@ -114,7 +118,6 @@ namespace VCTR
 
             linkTransmitTopic_.publish(packetBytes);
             lastSend_ = Core::NOW(); // Update the last send time.
-
         }
 
         void NetworkNode::receivePacket(const Core::List<uint8_t> &data)
@@ -122,7 +125,7 @@ namespace VCTR
 
             VRBS_MSG("Received a packet. Size: %d Pointer: %d\n", data.size(), this);
 
-            //Convert the data to a packet
+            // Convert the data to a packet
             NetworkPacket packet;
             if (!unpackPacket(packet, data))
             {
@@ -130,7 +133,7 @@ namespace VCTR
                 return;
             }
 
-            //Update the reachable nodes list
+            // Update the reachable nodes list
             bool found = false;
             for (size_t i = 0; i < nodeList_.size(); i++)
             {
@@ -154,14 +157,14 @@ namespace VCTR
                 return; // Ignore heartbeat packets.
             }
 
-            //Check if the node is for us and publish it to the receive topic
+            // Check if the node is for us and publish it to the receive topic
             if (packet.dstAddress == nodeAddress_ || packet.dstAddress == UINT16_MAX) // If this packet is for this node, publish it directly to the receive topic.
             {
-                //Decrement hops if not zero
+                // Decrement hops if not zero
                 if (packet.hops > 0)
                     packet.hops--;
-                
-                //Send packet to receive topic (Network -> Transport)
+
+                // Send packet to receive topic (Network -> Transport)
                 receiveTopic_.publish(packet);
             }
         }
@@ -193,7 +196,7 @@ namespace VCTR
             }
 
             // Calculate checksum
-            uint8_t checksum = 0;//Core::computeCrc(data, 0);
+            uint8_t checksum = 0; // Core::computeCrc(data, 0);
             for (size_t i = 0; i < data.size(); i++)
             {
                 if (i == 6) // Skip checksum byte
@@ -236,7 +239,7 @@ namespace VCTR
             }
 
             // Calculate checksum
-            uint8_t checksum = 0;//Core::computeCrc(data, 0);
+            uint8_t checksum = 0; // Core::computeCrc(data, 0);
             for (size_t i = 0; i < data.size(); i++)
             {
                 checksum += data[i];

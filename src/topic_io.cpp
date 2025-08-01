@@ -1,8 +1,8 @@
+#include "ExVectrCore/print.hpp"
 #include "ExVectrCore/list_buffer.hpp"
 #include "ExVectrCore/list_extern.hpp"
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
-#include "ExVectrCore/print.hpp"
 
 #include "ExVectrHAL/digital_io.hpp"
 
@@ -12,14 +12,14 @@ namespace VCTR
 {
 
     namespace Net
-    {   
+    {
 
-        TopicIO::TopicIO() 
+        TopicIO::TopicIO()
         {
             receiveSubr_.setCallback(this, &TopicIO::receiveItem);
         }
 
-        TopicIO::TopicIO(Core::Topic<const Core::List<uint8_t> &>& topic) : TopicIO()
+        TopicIO::TopicIO(Core::Topic<const Core::List<uint8_t> &> &topic) : TopicIO()
         {
             receiveSubr_.subscribe(topic);
         }
@@ -39,10 +39,9 @@ namespace VCTR
             {
                 receiveBuffer_.placeBack(item[i]);
             }
-
         }
 
-        void TopicIO::setTopicIO(Core::Topic<const Core::List<uint8_t> &>& topic)
+        void TopicIO::setTopicIO(Core::Topic<const Core::List<uint8_t> &> &topic)
         {
             receiveSubr_.subscribe(topic);
         }
@@ -72,13 +71,13 @@ namespace VCTR
 
         size_t TopicIO::readable()
         {
-            //VRBS_MSG("Buffer front: %d, back: %d, size: %d, this: %d\n", receiveBuffer_.getFront(), receiveBuffer_.getBack(), receiveBuffer_.size(), this);
+            // VRBS_MSG("Buffer front: %d, back: %d, size: %d, this: %d\n", receiveBuffer_.getFront(), receiveBuffer_.getBack(), receiveBuffer_.size(), this);
             return receiveBuffer_.size();
         }
 
         size_t TopicIO::readData(void *data, size_t size, bool endTransfer)
         {
-            
+
             VRBS_MSG("Reading %d bytes from buffer. Buffer size: %d. This: %d\n", size, receiveBuffer_.size(), this);
 
             size_t i = 0;
@@ -115,7 +114,7 @@ namespace VCTR
 
             VRBS_MSG("Sending %d bytes through topic. This: %d\n", size, this);
 
-            receiveSubr_.publish(Core::ListExtern<uint8_t>((uint8_t*)data, size));
+            receiveSubr_.publish(Core::ListExtern<uint8_t>((uint8_t *)data, size));
 
             return size;
         }
