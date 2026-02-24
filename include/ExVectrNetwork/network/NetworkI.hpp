@@ -3,23 +3,23 @@
 
 #include "ExVectrCore/handler.hpp"
 
-#include "ExVectrNetwork/interfaces/DatalinkInterface.hpp"
-#include "ExVectrNetwork/structs/NetworkPacket.hpp"
+#include "ExVectrNetwork/datalink/DatalinkI.hpp"
+#include "ExVectrNetwork/network/NetworkHeader.hpp"
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::network {
 
 /**
  * @brief Network layer class. This class takes care of routing packets to their
  * destination.
  */
-class Network_Interface {
+class NetworkI {
 protected:
   /// The address of this node.
   uint16_t nodeAddress_;
 
-  Core::HandlerGroup<const NetworkPacket &> packetReceiveHandlers_;
+  Core::HandlerGroup<const NetworkPacketHeader &,
+                     const Core::ListArray<uint8_t> &>
+      packetReceiveHandlers_;
 
 public:
   /**
@@ -28,7 +28,7 @@ public:
    * @param nodeAddress The address of this node. Set to 0 to only receive
    * packets.
    */
-  Network_Interface(uint16_t nodeAddress);
+  NetworkI(uint16_t nodeAddress);
 
   /**
    * @brief Set the address of this node.
@@ -49,14 +49,24 @@ public:
    *
    * @param packet The packet to be sent.
    */
-  virtual void sendPacket(const NetworkPacket &packet) = 0;
+  virtual void sendPacket(const NetworkPacketHeader &header,
+                          const Core::ListArray<uint8_t> &payload = 0) = 0;
+
+  /**
+   * @brief Get the maximum packet size that can be transmitted by the network.
+   * @note packets over this size will be dropped and not transmitted.
+   * @return size_t The maximum packet size in bytes.
+   */
+  virtual size_t getMaxPacketSize() const = 0;
 
   /**
    * @brief Adds a handler to be called when a network packet is received.
    * @param handler The handler function to be added.
    */
   void addPacketReceiveHandler(
-      Core::HandlerGroup<const NetworkPacket &>::HandlerFunction handler);
+      Core::HandlerGroup<const NetworkPacketHeader &,
+                         const Core::ListArray<uint8_t> &>::HandlerFunction
+          handler);
 
   /**
    * @brief Clears all handlers that are called when a network packet is
@@ -65,8 +75,6 @@ public:
   void clearPacketReceiveHandlers();
 };
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::network
 
 #endif

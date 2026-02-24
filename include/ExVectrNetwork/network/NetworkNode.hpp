@@ -7,13 +7,11 @@
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 
-#include "ExVectrNetwork/interfaces/DatalinkInterface.hpp"
-#include "ExVectrNetwork/interfaces/NetworkInterface.hpp"
-#include "ExVectrNetwork/structs/NetworkPacket.hpp"
+#include "ExVectrNetwork/datalink/DatalinkI.hpp"
+#include "ExVectrNetwork/network/NetworkHeader.hpp"
+#include "ExVectrNetwork/network/NetworkI.hpp"
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::network {
 
 /**
  * @brief Network layer class. This class takes care of routing packets to their
@@ -22,13 +20,13 @@ namespace Net {
  *            the correct datalink.
  *          - Implement forwarding of packets.
  */
-class NetworkNode : public Network_Interface, public Core::Task_Periodic {
+class NetworkNode : public NetworkI, public Core::Task_Periodic {
 private:
   /// Network version number. Used to calculate checksum and prevent
   /// incompatible networks from communicating.
   static constexpr uint8_t networkVersion = 2;
 
-  Core::ListArray<Datalink_Interface *> datalinks_;
+  Core::ListArray<datalink::DatalinkI *> datalinks_;
 
   /// If we havent heard from a node in this time, we consider it unreachable.
   /// Should be 4 times the sendInterval.
@@ -71,7 +69,7 @@ public:
    * @param datalink The datalink layer to use for sending and receiving
    * packets.
    */
-  NetworkNode(uint16_t nodeAddress, Datalink_Interface &datalink,
+  NetworkNode(uint16_t nodeAddress, datalink::DatalinkI &datalink,
               int64_t disconnectTimeout = 1 * Core::SECONDS);
 
   //~NetworkNode();
@@ -90,7 +88,7 @@ public:
    *
    * @param datalink The datalink layer to use.
    */
-  void addDatalink(Datalink_Interface &datalink);
+  void addDatalink(datalink::DatalinkI &datalink);
 
   /**
    * @brief Send a packet to the given destination address.
@@ -98,46 +96,39 @@ public:
    * @param packet The packet to send.
    * @param dstAddress The destination address.
    */
-  void sendPacket(const NetworkPacket &packet) override;
+  void sendPacket(const NetworkPacketHeader &header,
+                  const Core::ListArray<uint8_t> &payload = 0) override;
+
+  /**
+   * @brief Get the maximum packet size that can be transmitted by the network.
+   * @note packets over this size will be dropped and not transmitted.
+   * @return size_t The maximum packet size in bytes.
+   */
+  size_t getMaxPacketSize() const override;
+
+protected:
+  /**
+   * @brief Routes a packet to its destination. Can be overridden.
+   * @note The
+   *
+   * @param header Deserialized header of the packet.
+   * @param packet The packet to be routed. Still contains the header in its
+   * payload.
+   */
+  virtual void routePacket(const NetworkPacketHeader &header,
+                           const DataPacket &packet);
 
 private:
-  /**
-   * @brief Unpacks a packet from a list of bytes.
-   *
-   * @param packet The packet to unpack.
-   * @param data The data to unpack from.
-   * @return true if successful, false if not.
-   */
-  bool unpackPacket(NetworkPacket &packet, const Core::List<uint8_t> &data);
-
-  /**
-   * @brief Packs a packet into a list of bytes.
-   *
-   * @param packet The packet to pack.
-   * @param data The data to pack into.
-   * @return true if successful, false if not.
-   */
-  bool packPacket(const NetworkPacket &packet, Core::List<uint8_t> &data);
-
   /**
    * @brief Receives a packet from the datalink layer.
    *
    * @param data The data received.
    */
-  void receivePacket(const Core::List<uint8_t> &data);
-
-  /**
-   * @brief Routes a packet to its destination.
-   *
-   * @param packet The packet to route.
-   */
-  void routePacket(const NetworkPacket &packet);
+  void receivePacket(const DataPacket &data);
 
   void taskThread() override;
 };
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::network
 
 #endif

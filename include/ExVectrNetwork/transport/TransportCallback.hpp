@@ -8,11 +8,9 @@
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 
-#include "ExVectrNetwork/interfaces/NetworkInterface.hpp"
+#include "ExVectrNetwork/network/NetworkI.hpp"
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::transport {
 
 /**
  * @brief   The simple and fast transport class. Similar to UDP it will break up
@@ -40,7 +38,7 @@ private:
   /// @brief A version control for the transport simple. This is added together
   /// with the transport identifier to not conflict with other transport
   /// protocols.
-  static constexpr uint8_t transportSimpleVersion = 2;
+  static constexpr uint8_t transportSimpleVersion = 3;
   static constexpr uint8_t transportSimpleID = 1;
 
   /// @brief The limit of segments that can be stored in the segment buffer.
@@ -49,7 +47,7 @@ private:
   /// @brief The size limit of each segment in bytes.
   static constexpr uint8_t segmentSize = 128;
 
-  Network_Interface *netNode_ = nullptr;
+  VCTR::network::network::NetworkI *netNode_ = nullptr;
 
   /// @brief The port that this transport is using.
   uint16_t port_ = 0;
@@ -69,10 +67,6 @@ private:
   /// @brief The expected checksum of the data being received.
   uint8_t checksum_ = 0;
 
-  /// @brief A buffer to store the data being received until all segments are
-  /// received.
-  Core::ListArray<NetworkPacket> segmentBuffer_;
-
   /// @brief Buffer containing the final received data.
   Core::ListArray<uint8_t> receivedData_;
 
@@ -83,7 +77,9 @@ private:
   Core::Callback_Subscriber<TransportData, TransportCallback>
       transmitTopicSubr_;
 
-  Core::HandlerGroup<const NetworkPacket &> receivePacketHandlers_;
+  Core::HandlerGroup<const VCTR::network::network::NetworkPacketHeader &,
+                     const Core::ListArray<uint8_t> &>
+      receivePacketHandlers_;
 
 public:
   /**
@@ -97,13 +93,13 @@ public:
    * @param port The port to use for this transport.
    * @param node The network node to use for sending and receiving packets.
    */
-  TransportCallback(uint16_t port, Network_Interface &node);
+  TransportCallback(uint16_t port, VCTR::network::network::NetworkI &node);
 
   /**
    * @brief   Set the network node to use for sending and receiving packets.
    * @param node The network node to use.
    */
-  void setNetworkNode(Network_Interface &node);
+  void setNetworkNode(VCTR::network::network::NetworkI &node);
 
   /**
    * @brief   Set the port to use for sending and receiving packets.
@@ -144,18 +140,19 @@ private:
    * @param dstPort The destination port.
    * @param segmentID The ID of the segment being sent.
    */
-  void sendSegment(NetworkPacket &segment, uint16_t order, uint16_t dstAddress,
+  void sendSegment(const VCTR::network::network::NetworkPacketHeader &header,
+                   Core::ListArray<uint8_t> &data, uint16_t order,
                    uint16_t dstPort, uint8_t id);
 
   /**
    * @brief   Callback function for receiving data from the network node.
    * @param packet The packet that was received.
    */
-  void receivePacketCallback(const NetworkPacket &packet);
+  void receivePacketCallback(
+      const VCTR::network::network::NetworkPacketHeader &header,
+      const Core::ListArray<uint8_t> &payload);
 };
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::transport
 
 #endif

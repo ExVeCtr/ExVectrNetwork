@@ -6,7 +6,7 @@
 
 #include "ExVectrHAL/digital_io.hpp"
 
-#include "ExVectrNetwork/Datalink.hpp"
+#include "ExVectrNetwork/datalink/Datalink.hpp"
 
 /**
  * The datalink works by first sending a block command to the physical layer.
@@ -16,9 +16,7 @@
  * to release the physical layer.
  */
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::datalink {
 
 Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice,
                    Core::Scheduler &scheduler)
@@ -27,12 +25,12 @@ Datalink::Datalink(HAL::DigitalIO &physicalLayerDevice,
   scheduler.addTask(*this);
 }
 
-bool Datalink::transmitDataframe(const Dataframe &dataframe) {
+bool Datalink::transmitDataframe(const DataPacket &dataframe) {
 
   VRBS_MSG("Received %d bytes from topic to send. Pointer %d \n",
-           dataframe.data.size(), this);
+           dataframe.payload.size(), this);
 
-  auto len = dataframe.data.size();
+  auto len = dataframe.payload.size();
   if (len > dataLinkMaxFrameLength) {
     LOG_MSG("Max frame length exceeded. Failure.\n");
     return false; // Max frame length exceeded. Failure.
@@ -44,7 +42,7 @@ bool Datalink::transmitDataframe(const Dataframe &dataframe) {
 
   PhysicalFrame frame;
   for (size_t i = 0; i < len; i++)
-    frame.data[i] = dataframe.data[i];
+    frame.data[i] = dataframe.payload[i];
   frame.length = len;
   transmitBuffer_.placeBack(frame);
 
@@ -53,6 +51,13 @@ bool Datalink::transmitDataframe(const Dataframe &dataframe) {
 
 size_t Datalink::getBufferFreeSpace() const {
   return transmitBuffer_.sizeMax() - transmitBuffer_.size();
+}
+
+bool Datalink::isChannelBlocked() const { return physicalBlocked_; }
+
+size_t Datalink::getMaxPacketSize() const {
+  return dataLinkMaxFrameLength < getBufferFreeSpace() ? dataLinkMaxFrameLength
+                                                       : getBufferFreeSpace();
 }
 
 void Datalink::setPhysicalReleaseTimeout(int64_t time) {
@@ -117,9 +122,9 @@ void Datalink::taskThread() {
           VRBS_MSG("Publishing %d bytes. This: %d \n", receiveBuffer_.size(),
                    this);
           while (receiveBuffer_.size() > 0) {
-            Dataframe dataframe;
+            DataPacket dataframe;
             for (size_t i = 0; i < receiveBuffer_[0].length; i++)
-              dataframe.data.placeBack(receiveBuffer_[0].data[i]);
+              dataframe.payload.append(receiveBuffer_[0].data[i]);
             receiveBuffer_.removeFront();
             receiveHandlers_.callHandlers(dataframe);
           }
@@ -228,6 +233,4 @@ void Datalink::taskCheck() {
   }
 }
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::datalink

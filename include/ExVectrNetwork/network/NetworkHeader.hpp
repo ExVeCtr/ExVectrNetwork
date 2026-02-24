@@ -1,12 +1,15 @@
-#ifndef EXVECTRNETWORK_STRUCTS_NETWORKPACKET_HPP_
-#define EXVECTRNETWORK_STRUCTS_NETWORKPACKET_HPP_
+#ifndef EXVECTRNETWORK_STRUCTS_NETWORKHEADER_HPP_
+#define EXVECTRNETWORK_STRUCTS_NETWORKHEADER_HPP_
 
 #include "ExVectrCore/list.hpp"
 #include "ExVectrCore/list_buffer.hpp"
 
-namespace VCTR::Net {
+#include "ExVectrNetwork/DataPacket.hpp"
 
-constexpr uint8_t packetPayloadMaxLength = 200;
+namespace VCTR::network::network {
+
+/// @brief   Network packet structure version. Added to the checksum.
+static constexpr uint8_t networkVersion = 2;
 
 enum class NetworkPacketType : uint8_t {
   DATA,     // Packet data is for the application layer.
@@ -23,7 +26,8 @@ enum class NetworkPacketType : uint8_t {
  * dstAddress, payloadLength and payload are used by the application layer. The
  * rest is handled by the network layer.
  */
-struct NetworkPacket {
+class NetworkPacketHeader : public PacketHeaderI {
+public:
   /// Packet type. What is this packet for?
   NetworkPacketType type = NetworkPacketType::DATA;
   /// Number of hops this packet can still take. Will be decremented by 1 each
@@ -37,10 +41,21 @@ struct NetworkPacket {
   /// sum of all bytes in the packet only excluding the checksum byte plus
   /// network version number.
   uint8_t checksum;
-  /// The data carried by this packet.
-  Core::ListBuffer<uint8_t, packetPayloadMaxLength> payload;
+
+protected:
+  void serialize(uint8_t *buffer) const override;
+  bool deserialize(const uint8_t *buffer) override;
+
+public:
+  size_t getHeaderSize() const override;
 };
 
-} // namespace VCTR::Net
+class NetworkPacket {
+public:
+  NetworkPacketHeader header;
+  VCTR::network::DataPacket packet;
+};
+
+} // namespace VCTR::network::network
 
 #endif

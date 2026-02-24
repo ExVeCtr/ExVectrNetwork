@@ -10,13 +10,9 @@
 
 #include "ExVectrHAL/digital_io.hpp"
 
-namespace VCTR::Net {
+#include "ExVectrNetwork/DataPacket.hpp"
 
-constexpr size_t dataLinkMaxFrameLength = 250;
-
-struct Dataframe {
-  Core::ListBuffer<uint8_t, dataLinkMaxFrameLength> data;
-};
+namespace VCTR::network::datalink {
 
 /**
  * @brief Interface for the datalink layer. Inhereting classes must implement
@@ -24,29 +20,33 @@ struct Dataframe {
  * @note The datalink class is responsible for receiving dataframes from the
  * physical layer and sending dataframes to the physical layer.
  */
-class Datalink_Interface {
+class DatalinkI {
 protected:
   /// @brief This handler group is called when a dataframe is received.
-  Core::HandlerGroup<const Dataframe &> receiveHandlers_;
+  Core::HandlerGroup<const DataPacket &> receiveHandlers_;
 
 public:
-  virtual bool transmitDataframe(const Dataframe &dataframe) = 0;
+  virtual bool transmitDataframe(const DataPacket &dataframe) = 0;
 
   /**
-   * @brief Get the amount of free space in bytes in the transmit buffer.
-   * This can be used to check if there is enough space to send a dataframe
-   * before attempting to send it.
-   *
-   * @return size_t The amount of free space in the transmit buffer.
+   * @brief Get the maximum packet size that can be transmitted by the datalink.
+   * @note packets over this size will be dropped and not transmitted.
+   * @return size_t The maximum packet size in bytes.
    */
-  virtual size_t getBufferFreeSpace() const = 0;
+  virtual size_t getMaxPacketSize() const = 0;
+
+  /**
+   * @returns true if the datalink is currently blocked and cannot send
+   * dataframes.
+   */
+  virtual bool isChannelBlocked() const = 0;
 
   /**
    * @brief Adds a handler to be called when a dataframe is received.
    * @param handler The handler function to be added.
    */
   void addReceiveHandler(
-      Core::HandlerGroup<const Dataframe &>::HandlerFunction handler);
+      Core::HandlerGroup<const DataPacket &>::HandlerFunction handler);
 
   /**
    * @brief Clears all handlers that are called when a dataframe is received.
@@ -54,6 +54,6 @@ public:
   void clearReceiveHandlers();
 };
 
-} // namespace VCTR::Net
+} // namespace VCTR::network::datalink
 
 #endif

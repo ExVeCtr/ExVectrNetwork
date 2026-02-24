@@ -9,18 +9,16 @@
 
 #include "ExVectrHAL/digital_io.hpp"
 
-#include "ExVectrNetwork/interfaces/DatalinkInterface.hpp"
+#include "ExVectrNetwork/datalink/DatalinkI.hpp"
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::datalink {
 
 /**
  * @brief   Datalink layer class is a general implementation for use with any
  * physical layer implementing the HAL::DigitalIO interface.
  *
  */
-class Datalink : public Datalink_Interface, public Core::Task_Periodic {
+class Datalink : public DatalinkI, public Core::Task_Periodic {
 public:
   ///@brief Maximum length a data frame can be.
   static constexpr size_t dataLinkMaxFrameLength = 230;
@@ -95,9 +93,13 @@ public:
    */
   void setPhysicalReleaseTimeout(int64_t time);
 
-  bool transmitDataframe(const Dataframe &dataframe) override;
+  bool transmitDataframe(const DataPacket &dataframe) override;
 
-  size_t getBufferFreeSpace() const override;
+  size_t getBufferFreeSpace() const;
+
+  bool isChannelBlocked() const override;
+
+  size_t getMaxPacketSize() const override;
 
 private:
   /**
@@ -116,8 +118,6 @@ private:
   void taskThread() override;
 };
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::datalink
 
 #endif

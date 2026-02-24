@@ -6,11 +6,9 @@
 
 #include "ExVectrHAL/digital_io.hpp"
 
-#include "ExVectrNetwork/physicallayers/TopicIo.hpp"
+#include "ExVectrNetwork/physical/TopicIo.hpp"
 
-namespace VCTR {
-
-namespace Net {
+namespace VCTR::network::physical {
 
 TopicIO::TopicIO() { receiveSubr_.setCallback(this, &TopicIO::receiveItem); }
 
@@ -99,6 +97,4 @@ size_t TopicIO::writeData(const void *data, size_t size, bool endTransfer) {
   return size;
 }
 
-} // namespace Net
-
-} // namespace VCTR
+} // namespace VCTR::network::physical

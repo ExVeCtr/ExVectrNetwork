@@ -7,7 +7,7 @@
 #include "ExVectrCore/topic.hpp"
 #include "ExVectrCore/topic_subscribers.hpp"
 
-#include "ExVectrNetwork/TransportCallback.hpp"
+#include "ExVectrNetwork/transport/TransportCallback.hpp"
 
 namespace VCTR {
 
@@ -64,8 +64,8 @@ public:
    * @param node The network node to use for sending and receiving data.
    * @param noReceive If true then this topic will not receive data (Send only).
    */
-  TransportTopic(uint16_t channel, uint16_t dstAddress, Network_Interface &node,
-                 bool noReceive = false)
+  TransportTopic(uint16_t channel, uint16_t dstAddress,
+                 network::network::NetworkI &node, bool noReceive = false)
       : TransportTopic(channel, dstAddress, noReceive) {
     setNetworkNode(node);
   }
@@ -80,8 +80,9 @@ public:
    * @param topic The topic to use for sending and receiving data.
    * @param noReceive If true then this topic will not receive data (Send only).
    */
-  TransportTopic(uint16_t channel, uint16_t dstAddress, Network_Interface &node,
-                 Core::Topic<TYPE> &topic, bool noReceive = false)
+  TransportTopic(uint16_t channel, uint16_t dstAddress,
+                 network::network::NetworkI &node, Core::Topic<TYPE> &topic,
+                 bool noReceive = false)
       : TransportTopic(channel, dstAddress, node, noReceive) {
     setTopic(topic);
   }
@@ -108,7 +109,7 @@ public:
    * @brief   Set the network node to use for sending and receiving packets.
    * @param node The network node to use.
    */
-  void setNetworkNode(Network_Interface &node) {
+  void setNetworkNode(network::network::NetworkI &node) {
     transport_.setNetworkNode(node);
   }
 
