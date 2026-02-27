@@ -2,13 +2,6 @@
 #define EXVECTRNETWORK_INTERFACES_DATALINKINTERFACE_HPP_
 
 #include "ExVectrCore/handler.hpp"
-#include "ExVectrCore/list.hpp"
-#include "ExVectrCore/list_buffer.hpp"
-#include "ExVectrCore/task_types.hpp"
-#include "ExVectrCore/topic.hpp"
-#include "ExVectrCore/topic_subscribers.hpp"
-
-#include "ExVectrHAL/digital_io.hpp"
 
 #include "ExVectrNetwork/DataPacket.hpp"
 

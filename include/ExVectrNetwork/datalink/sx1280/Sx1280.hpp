@@ -9,7 +9,7 @@
 #include "ExVectrHAL/pin_gpio.hpp"
 
 #include "ExVectrNetwork/DataPacket.hpp"
-#include "ExVectrNetwork/datalink/DatalinkI.hpp"
+#include "ExVectrNetwork/datalink/RadioI.hpp"
 #include "ExVectrNetwork/physical/HasChannels.hpp"
 
 #include "sx12xxAL/src/SX128XLT.h"
@@ -47,11 +47,17 @@ enum SX1280_CR : uint8_t {
 /**
  * @brief A class implementing a datalink layer for the SX1280 LoRa transceiver.
  */
-class Datalink_SX1280 : public VCTR::network::datalink::DatalinkI,
+class Datalink_SX1280 : public VCTR::network::datalink::RadioI,
                         public VCTR::Core::Task_Periodic {
 private:
   ///@brief Maximum length a data frame can be.
   static constexpr size_t dataLinkMaxFrameLength = 200;
+
+  static constexpr uint8_t numChannels = 10;
+  static constexpr uint32_t minFreq = 2.41e9;
+  static constexpr uint32_t maxFreq = 2.47e9;
+  static constexpr uint32_t channelFrequencySpacing =
+      (maxFreq - minFreq) / (numChannels - 1);
 
   using HandlerFunction = std::function<void()>;
 
@@ -92,10 +98,13 @@ private:
   bool cadBeforeSend_ = false;
 
   bool modParamsChanged = true;
+  bool freqParamChanged = true;
   SX1280_SF spreadingFactor = SX1280_SF::SF_10;
   SX1280_BW bandwidth = SX1280_BW::BW_800KHz;
   SX1280_CR codingRate = SX1280_CR::CR_4_8;
-  uint32_t freq_hz = 2445000000;
+  uint32_t freq_hz = minFreq;
+
+  uint8_t currentChannel_ = 0;
 
   Core::HandlerGroup<> transmitFinishedHandler_;
 
@@ -139,6 +148,10 @@ public:
   void taskCheck() override;
 
   bool transmitDataframe(const DataPacket &dataframe) override;
+
+  size_t getNumChannels() const override;
+  size_t getCurrentChannel() const override;
+  void setCurrentChannel(size_t channel) override;
 
 private:
   void updateModulationParams();

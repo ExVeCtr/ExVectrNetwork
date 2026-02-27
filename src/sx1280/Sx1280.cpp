@@ -64,7 +64,7 @@ bool Datalink_SX1280::isChannelBlocked() const {
 }
 
 void Datalink_SX1280::setFrequency(uint32_t freq_hz) {
-  modParamsChanged = true;
+  freqParamChanged = true;
   this->freq_hz = freq_hz;
 }
 
@@ -350,13 +350,17 @@ void Datalink_SX1280::beginReceive(int timeout) {
 }
 
 void Datalink_SX1280::updateModulationParams() {
-  if (!modParamsChanged)
-    return;
-  lora.setRfFrequency(freq_hz, 0);
-  lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
-  lora.setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
-                       LORA_IQ_NORMAL, 0, 0);
-  modParamsChanged = false;
+  if (modParamsChanged) {
+    lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
+    lora.setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
+                         LORA_IQ_NORMAL, 0, 0);
+    modParamsChanged = false;
+  }
+
+  if (freqParamChanged) {
+    lora.setRfFrequency(freq_hz, 0);
+    freqParamChanged = false;
+  }
 }
 
 bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
@@ -531,6 +535,17 @@ bool Datalink_SX1280::transmitDataframe(const DataPacket &dataframe) {
   for (size_t i = 0; i < len; i++)
     transmitBuffer_.placeBack(dataframe.payload[i]);
   return true;
+}
+
+size_t Datalink_SX1280::getNumChannels() const { return numChannels; }
+
+size_t Datalink_SX1280::getCurrentChannel() const { return currentChannel_; }
+
+void Datalink_SX1280::setCurrentChannel(size_t channel) {
+  channel = channel % numChannels; // Wrap around the channel number if it
+                                   // exceeds the number of channels
+  currentChannel_ = channel;
+  freq_hz = minFreq + channel * channelFrequencySpacing;
 }
 
 } // namespace VCTR::network::datalink
