@@ -85,6 +85,8 @@ void Datalink_SX1280::setCodingRate(SX1280_CR cr) {
 
 void Datalink_SX1280::setTxPower(float power) { txPower_ = power; }
 
+void Datalink_SX1280::setPAdbm(uint8_t paDbm) { paDbm_ = paDbm; }
+
 void Datalink_SX1280::enableTxRx(bool enable) {
   enableTxRx_ = enable;
   if (!enable && radioState_ == RadioState::Receiving) {
@@ -432,7 +434,8 @@ bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
   //          bufferSize);
 
   if (/*bufferSize > 0*/ true) {
-    lora.transmit(buffer, transmitBuffer_.size(), 0, txPower_, NO_WAIT);
+    lora.transmit(buffer, transmitBuffer_.size(), 0, txPower_ - paDbm_,
+                  NO_WAIT);
     transmitBuffer_.clear(); // Clear the buffer. We have sent the data.
     radioState_ = RadioState::Transmitting;
     transmitStart_ = threadTime;

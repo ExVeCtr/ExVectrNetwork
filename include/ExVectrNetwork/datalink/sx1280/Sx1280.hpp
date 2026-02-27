@@ -92,7 +92,8 @@ private:
 
   int64_t idleStart_ = 0;
 
-  float txPower_ = 12;
+  float txPower_ = 0;
+  float paDbm_ = 0;
 
   bool enableTxRx_ = false;
   bool cadBeforeSend_ = false;
@@ -130,6 +131,10 @@ public:
   void setBandwidth(SX1280_BW bw);
   void setCodingRate(SX1280_CR cr);
   void setTxPower(float power);
+
+  // Sets the number of db the PA adds to the output power.
+  // This is used to change sx1280 output power to reach the desired Tx power.
+  void setPAdbm(uint8_t paDbm);
 
   /**
    * @brief Enables or disables the ability to transmit or receive data.
