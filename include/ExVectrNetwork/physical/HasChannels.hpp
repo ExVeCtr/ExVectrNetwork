@@ -15,7 +15,7 @@ public:
 
   virtual size_t getCurrentChannel() const = 0;
 
-  virtual void setCurrentChannel(size_t channel) = 0;
+  virtual void setChannel(size_t channel) = 0;
 };
 
 } // namespace VCTR::network::physical

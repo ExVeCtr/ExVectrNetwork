@@ -551,7 +551,7 @@ size_t Datalink_SX1280::getNumChannels() const { return numChannels; }
 
 size_t Datalink_SX1280::getCurrentChannel() const { return currentChannel_; }
 
-void Datalink_SX1280::setCurrentChannel(size_t channel) {
+void Datalink_SX1280::setChannel(size_t channel) {
   channel = channel % numChannels; // Wrap around the channel number if it
                                    // exceeds the number of channels
   currentChannel_ = channel;
