@@ -21,9 +21,9 @@
 
 namespace VCTR::network::datalink {
 
-Datalink_SX1280::Datalink_SX1280(SX128XLT &sx1280Driver, const char *name)
+Datalink_SX1280::Datalink_SX1280(SX128XLT &sx1280Driver)
     : Task_Periodic("Datalink_SX1280", 100 * Core::MILLISECONDS),
-      lora(sx1280Driver), name(name) {
+      lora(sx1280Driver) {
 
   Core::getSystemScheduler().addTask(*this);
 }
@@ -34,7 +34,7 @@ void Datalink_SX1280::logMsg(const char *format, ...) const {
   va_start(args, format);
   vsnprintf(message, sizeof(message), format, args);
   va_end(args);
-  LOG_MSG("[%s] %s", name, message);
+  LOG_MSG("%s", message);
 }
 
 void Datalink_SX1280::debugLog(const char *format, ...) const {
@@ -83,7 +83,11 @@ void Datalink_SX1280::setCodingRate(SX1280_CR cr) {
   codingRate = cr;
 }
 
-void Datalink_SX1280::setTxPower(float power) { txPower_ = power; }
+void Datalink_SX1280::setTxPower(int8_t power) { txPower_ = power; }
+
+void Datalink_SX1280::setTxMaxPower(int8_t maxTxPowerDBm) {
+  maxTxPowerDBm_ = maxTxPowerDBm;
+}
 
 void Datalink_SX1280::setPAdbm(uint8_t paDbm) { paDbm_ = paDbm; }
 
@@ -434,8 +438,11 @@ bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
   //          bufferSize);
 
   if (/*bufferSize > 0*/ true) {
-    lora.transmit(buffer, transmitBuffer_.size(), 0, txPower_ - paDbm_,
-                  NO_WAIT);
+    auto power = txPower_ - paDbm_;
+    if (power > maxTxPowerDBm_) {
+      power = maxTxPowerDBm_;
+    }
+    lora.transmit(buffer, transmitBuffer_.size(), 0, power, NO_WAIT);
     transmitBuffer_.clear(); // Clear the buffer. We have sent the data.
     radioState_ = RadioState::Transmitting;
     transmitStart_ = threadTime;

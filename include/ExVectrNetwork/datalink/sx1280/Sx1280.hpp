@@ -92,8 +92,9 @@ private:
 
   int64_t idleStart_ = 0;
 
-  float txPower_ = 0;
-  float paDbm_ = 0;
+  int8_t maxTxPowerDBm_ = 12;
+  int8_t txPower_ = 0;
+  int8_t paDbm_ = 0;
 
   bool enableTxRx_ = false;
   bool cadBeforeSend_ = false;
@@ -109,15 +110,11 @@ private:
 
   Core::HandlerGroup<> transmitFinishedHandler_;
 
-  const char *name;
-
   void logMsg(const char *format, ...) const;
   void debugLog(const char *format, ...) const;
 
 public:
-  Datalink_SX1280(SX128XLT &sx1280Driver, const char *name = "RadioSX1280");
-
-  void setName(const char *name) { this->name = name; }
+  Datalink_SX1280(SX128XLT &sx1280Driver);
 
   int16_t lastPacketRSSI() const { return receivedDataRSSI_; }
   int16_t lastPacketSNR() const { return receivedDataSNR_; }
@@ -130,12 +127,12 @@ public:
   void setSpreadingFactor(SX1280_SF sf);
   void setBandwidth(SX1280_BW bw);
   void setCodingRate(SX1280_CR cr);
-  void setTxPower(float power);
+  void setTxPower(int8_t power);
+  void setTxMaxPower(int8_t maxTxPowerDBm);
 
   // Sets the number of db the PA adds to the output power.
   // This is used to change sx1280 output power to reach the desired Tx power.
   void setPAdbm(uint8_t paDbm);
-
   /**
    * @brief Enables or disables the ability to transmit or receive data.
    * @example For Diversity, we disable all radios accept one for transmitting,
