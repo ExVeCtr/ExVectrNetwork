@@ -16,10 +16,11 @@ namespace VCTR::network::datalink {
 class DatalinkI {
 protected:
   /// @brief This handler group is called when a dataframe is received.
-  Core::HandlerGroup<const DataPacket &> receiveHandlers_;
+  Core::HandlerGroup<const VCTR::network::DataPacket &> receiveHandlers_;
 
 public:
-  virtual bool transmitDataframe(const DataPacket &dataframe) = 0;
+  virtual bool
+  transmitDataframe(const VCTR::network::DataPacket &dataframe) = 0;
 
   /**
    * @brief Get the maximum packet size that can be transmitted by the datalink.
@@ -39,7 +40,8 @@ public:
    * @param handler The handler function to be added.
    */
   void addReceiveHandler(
-      Core::HandlerGroup<const DataPacket &>::HandlerFunction handler);
+      Core::HandlerGroup<const VCTR::network::DataPacket &>::HandlerFunction
+          handler);
 
   /**
    * @brief Clears all handlers that are called when a dataframe is received.

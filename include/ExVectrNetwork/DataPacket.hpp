@@ -19,8 +19,7 @@ class DataPacket {
 public:
   DataPacket() = default;
 
-  DataPacket(const Core::ListArray<uint8_t> &other)
-      : payload(std::move(other)) {}
+  DataPacket(const Core::ListArray<uint8_t> &other) : payload(other) {}
 
   /// The data carried by this packet.
   Core::ListArray<uint8_t> payload;
