@@ -44,7 +44,7 @@ void Datalink_SX1280::debugLog(const char *format, ...) const {
   va_start(args, format);
   vsnprintf(message, sizeof(message), format, args);
   va_end(args);
-  LOG_MSG("[%s] %s", name, message);
+  LOG_MSG("%s", message);
 #endif
 }
 
@@ -93,7 +93,7 @@ void Datalink_SX1280::setPAdbm(uint8_t paDbm) { paDbm_ = paDbm; }
 
 void Datalink_SX1280::enableTxRx(bool enable) {
   enableTxRx_ = enable;
-  if (!enable && radioState_ == RadioState::Receiving) {
+  if (!enable && radioState_ == RadioState::WaitingForReceive) {
     lora.setMode(MODE_STDBY_RC);
     radioState_ = RadioState::Idle;
   }
@@ -102,6 +102,10 @@ void Datalink_SX1280::enableTxRx(bool enable) {
 void Datalink_SX1280::cadBeforeSend(bool enable) { cadBeforeSend_ = enable; }
 
 void Datalink_SX1280::clearTransmitBuffer() { transmitBuffer_.clear(); }
+
+void Datalink_SX1280::addTransmitFinishedHandler(HandlerFunction handler) {
+  transmitFinishedHandler_.addHandler(handler);
+}
 
 void Datalink_SX1280::taskInit() {
 
@@ -219,6 +223,8 @@ void Datalink_SX1280::taskThread() {
       // LOG_MSG("Tx took %.2f ms\n",
       //         double(transmitEnd_ - transmitStart_) / Core::MILLISECONDS);
 
+      transmitFinishedHandler_.callHandlers();
+
       lora.clearIrqStatus(
           IRQ_TX_DONE); // Clear the irq status. We are done receiving data.
     }
@@ -317,6 +323,15 @@ void Datalink_SX1280::taskThread() {
     debugLog("Radio RX timeout issue. Putting back into receive\n");
   }
 
+  if (radioState_ == RadioState::WaitingForReceive &&
+      (freqParamChanged || modParamsChanged)) {
+    beginReceive();
+    receiveStart_ = threadTime;
+
+    debugLog("Radio was waiting for receive but params changed. Restarting "
+             "receive to update params\n");
+  }
+
   if (radioState_ == RadioState::Transmitting &&
       threadTime - transmitStart_ >
           500 * Core::MILLISECONDS) { // Timout case for transmitting data. Go
@@ -381,7 +396,7 @@ bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
   // uint8_t bufferSize = 0;
   // uint8_t crc = 0;
 
-  debugLog("There is data to send. Moving segments into buffer...\n");
+  // LOG_MSG("There is data to send. Moving segments into buffer...\n");
 
   // We keep placing each packet frame into the buffer untill the next one
   // would be too much.
@@ -449,8 +464,8 @@ bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
     return true;
   } else {
     logMsg("Datalink: No data to send. Failure. Why does the buffer contain "
-           "data, "
-           "but the data is marked with 0 length?... Buffer will be cleared\n");
+           "data, but the data is marked with 0 length?... Buffer will be "
+           "cleared\n");
     transmitBuffer_.clear();
   }
 
@@ -556,6 +571,7 @@ void Datalink_SX1280::setChannel(size_t channel) {
                                    // exceeds the number of channels
   currentChannel_ = channel;
   freq_hz = minFreq + channel * channelFrequencySpacing;
+  setFrequency(freq_hz);
 }
 
 } // namespace VCTR::network::datalink
