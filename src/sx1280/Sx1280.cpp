@@ -116,7 +116,7 @@ void Datalink_SX1280::taskInit() {
     return;
   }
 
-  lora.setupLoRa(2445000000, 0, LORA_SF5, LORA_BW_1600, LORA_CR_4_6);
+  lora.setupLoRa(2445000000, 0, LORA_SF6, LORA_BW_0800, LORA_CR_LI_4_8);
   lora.setDioIrqParams(IRQ_RADIO_ALL, IRQ_RADIO_ALL, 0, 0);
   lora.setHighSensitivity();
   lora.receiveSXBuffer(0, 0, NO_WAIT);
@@ -301,7 +301,7 @@ void Datalink_SX1280::taskThread() {
 
     if (cadBeforeSend_) {
       radioState_ = RadioState::ActivityDetection;
-      lora.startCAD(LORA_CAD_08_SYMBOL);
+      lora.startCAD(LORA_CAD_04_SYMBOL);
     } else {
       transmitAwaitingData(threadTime);
     }
@@ -372,6 +372,9 @@ void Datalink_SX1280::beginReceive(int timeout) {
 
 void Datalink_SX1280::updateModulationParams() {
   if (modParamsChanged) {
+#ifdef SX1280_DEBUG
+    LOG_MSG("Changing mod params\n");
+#endif
     lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
     lora.setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
                          LORA_IQ_NORMAL, 0, 0);
@@ -379,12 +382,19 @@ void Datalink_SX1280::updateModulationParams() {
   }
 
   if (freqParamChanged) {
+#ifdef SX1280_DEBUG
+    LOG_MSG("Changing freq\n");
+#endif
     lora.setRfFrequency(freq_hz, 0);
     freqParamChanged = false;
   }
 }
 
 bool Datalink_SX1280::transmitAwaitingData(int64_t threadTime) {
+
+#ifdef SX1280_DEBUG
+  LOG_MSG("Transmitting data\n");
+#endif
 
   if (transmitBuffer_.size() == 0)
     return false; // Nothing to send. Return.
@@ -538,7 +548,7 @@ bool Datalink_SX1280::transmitDataframe(const DataPacket &dataframe) {
   // LOG_MSG("Received %d bytes from topic to send. Pointer %d \n",
   // item.size(), this);
 
-  if (!enableTxRx_) {
+  if (!enableTxRx_ || transmitBuffer_.size() > 0) {
     return false;
   }
 
