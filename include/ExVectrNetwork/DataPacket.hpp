@@ -23,6 +23,9 @@ public:
 
   /// The data carried by this packet.
   Core::ListArray<uint8_t> payload;
+
+  /// The time when this packet was created for transmission or received.
+  int64_t timestamp = 0;
 };
 
 /**

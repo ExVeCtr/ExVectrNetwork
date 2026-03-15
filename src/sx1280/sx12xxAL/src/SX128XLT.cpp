@@ -1868,7 +1868,7 @@ uint8_t SX128XLT::transmitSXBufferIRQ(uint8_t startaddr, uint8_t length,
   }
 }
 
-void SX128XLT::writeBuffer(uint8_t *txbuffer, uint8_t size) {
+void SX128XLT::writeBuffer(const uint8_t *txbuffer, uint8_t size) {
 #ifdef SX128XDEBUG1
   Serial.println(F("writeBuffer()"));
 #endif

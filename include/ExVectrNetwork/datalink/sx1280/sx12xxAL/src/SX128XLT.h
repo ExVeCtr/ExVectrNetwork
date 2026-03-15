@@ -143,7 +143,7 @@ public:
                            int8_t txpower, uint8_t wait);
   uint8_t transmitSXBufferIRQ(uint8_t startaddr, uint8_t length,
                               uint16_t timeout, int8_t txpower, uint8_t wait);
-  void writeBuffer(uint8_t *txbuffer, uint8_t size);
+  void writeBuffer(const uint8_t *txbuffer, uint8_t size);
   // void writeBuffer(uint8_t *txbuffer, uint8_t startaddr, uint8_t size);
   uint8_t receiveSXBuffer(uint8_t startaddr, uint16_t timeout, uint8_t wait);
   uint8_t receiveSXBufferIRQ(uint8_t startaddr, uint16_t timeout, uint8_t wait);
