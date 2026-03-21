@@ -9,6 +9,8 @@
   See LICENSE.TXT file included in the library
 */
 
+#include <cmath>
+
 #include "ExVectrCore/print.hpp"
 #include "ExVectrCore/time_definitions.hpp"
 
@@ -645,6 +647,18 @@ void SX128XLT::setLowPowerRX() {
 #endif
 
   writeRegister(REG_LNA_REGIME, (readRegister(REG_LNA_REGIME) & 0x3F));
+}
+
+void SX128XLT::setLongPreamble(bool enable) {
+  // Send SetLongPreamble command (0x9B) with 0x01 to enable, 0x00 to disable.
+  // Only applicable to LoRa packets; extends preamble duration to >20ms.
+#ifdef SX128XDEBUG
+  Serial.println(F("setLongPreamble()"));
+#endif
+
+  uint8_t buffer[1];
+  buffer[0] = enable ? 0x01 : 0x00;
+  writeCommand(RADIO_SET_LONGPREAMBLE, buffer, 1);
 }
 
 void SX128XLT::printModemSettings() {
@@ -1887,6 +1901,14 @@ void SX128XLT::writeBuffer(const uint8_t *txbuffer, uint8_t size) {
   _spiBus.writeByte(
       0,
       false); // this ensures last byte of buffer written really is a null (0)
+}
+
+void SX128XLT::writeBufferRaw(const uint8_t *txbuffer, uint8_t size) {
+  // Writes all bytes as-is — no null terminator is appended.
+  // Use this for binary payloads; pair with readBuffer(ptr, size) on the RX
+  // side.
+  _TXPacketL += size;
+  _spiBus.writeData(txbuffer, size, false);
 }
 
 uint8_t SX128XLT::receiveSXBuffer(uint8_t startaddr, uint16_t timeout,
@@ -4831,6 +4853,108 @@ uint8_t SX128XLT::sendACKDTIRQ(uint8_t *header, uint8_t headersize,
 }
 
 #endif
+
+//***************************************************************************
+// LoRa Time-on-Air calculation helpers
+// Formulas from SX1280 datasheet DS.SX1280-1 Rev 3.3, section 7.4.4.1
+// (legacy coding rate, i.e. not Long Interleaving).
+//***************************************************************************
+
+float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
+                                    uint16_t preambleSymbols, bool headerType,
+                                    bool crcOn, uint8_t payloadBytes) {
+
+  // N_bit_CRC: 16 if CRC is activated, 0 otherwise
+  const int32_t nBitCrc = crcOn ? 16 : 0;
+
+  // N_symbol_header: 20 for variable/explicit header, 0 for fixed/implicit
+  const int32_t nSymbolHeader = headerType ? 20 : 0;
+
+  // The base number of non-payload overhead symbols differs by SF range:
+  //   SF < 7  : preamble + 6.25 + 8
+  //   SF >= 7 : preamble + 4.25 + 8
+  const float overhead =
+      static_cast<float>(preambleSymbols) + 8.0f + (sf < 7 ? 6.25f : 4.25f);
+
+  // Compute the payload symbol count.
+  // The numerator and denominator of the ceil() term vary by SF range:
+  //
+  //   SF < 7       : ceil( max(8*PL + CRC - 4*SF     + hdr, 0) / (4*SF    ) ) *
+  //   (CR+4) 7 <= SF <= 10: ceil( max(8*PL + CRC - 4*SF + 8 + hdr, 0) / (4*SF
+  //   ) ) * (CR+4) SF > 10      : ceil( max(8*PL + CRC - 4*(SF-2)+8+ hdr, 0) /
+  //   (4*(SF-2)) ) * (CR+4)
+
+  int32_t numerator;
+  int32_t denominator;
+
+  if (sf < 7) {
+    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
+                4 * static_cast<int32_t>(sf) + nSymbolHeader;
+    denominator = 4 * static_cast<int32_t>(sf);
+  } else if (sf <= 10) {
+    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
+                4 * static_cast<int32_t>(sf) + 8 + nSymbolHeader;
+    denominator = 4 * static_cast<int32_t>(sf);
+  } else {
+    // SF 11, 12
+    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
+                4 * (static_cast<int32_t>(sf) - 2) + 8 + nSymbolHeader;
+    denominator = 4 * (static_cast<int32_t>(sf) - 2);
+  }
+
+  float payloadSymbols = 0.0f;
+  if (numerator > 0) {
+    payloadSymbols = std::ceil(static_cast<float>(numerator) /
+                               static_cast<float>(denominator)) *
+                     static_cast<float>(cr + 4);
+  }
+
+  return overhead + payloadSymbols;
+}
+
+float SX128XLT::calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz,
+                                    uint8_t cr, uint16_t preambleSymbols,
+                                    bool headerType, bool crcOn,
+                                    uint8_t payloadBytes) {
+
+  const float nSymbol = calcLoRaSymbolCount(sf, cr, preambleSymbols, headerType,
+                                            crcOn, payloadBytes);
+
+  // ToA = (2^SF / BW) * N_symbol
+  // With BW in Hz and the desired result in ms:
+  //   ToA_ms = (2^SF / BW_Hz) * N_symbol * 1000
+  const float symbolDurationMs =
+      (static_cast<float>(1UL << sf) / static_cast<float>(bandwidthHz)) *
+      1000.0f;
+
+  return symbolDurationMs * nSymbol;
+}
+
+float SX128XLT::getLoRaSymbolCount(uint8_t payloadBytes) {
+
+  const uint8_t sf = getLoRaSF();              // 5 – 12
+  const uint8_t cr = savedModParam3;           // 1 – 4 for legacy CR
+  const uint16_t preamble = savedPacketParam1; // preamble length in symbols
+  const bool explicitHeader =
+      (savedPacketParam2 == 0);                // 0x00 = variable/explicit
+  const bool crcOn = (savedPacketParam4 != 0); // non-zero = CRC enabled
+
+  return calcLoRaSymbolCount(sf, cr, preamble, explicitHeader, crcOn,
+                             payloadBytes);
+}
+
+float SX128XLT::getLoRaTimeOnAirMs(uint8_t payloadBytes) {
+
+  const uint8_t sf = getLoRaSF();
+  const uint32_t bwHz = returnBandwidth(savedModParam2);
+  const uint8_t cr = savedModParam3;
+  const uint16_t preamble = savedPacketParam1;
+  const bool explicitHeader = (savedPacketParam2 == 0);
+  const bool crcOn = (savedPacketParam4 != 0);
+
+  return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, explicitHeader, crcOn,
+                             payloadBytes);
+}
 
 } // namespace VCTR::network::datalink
 

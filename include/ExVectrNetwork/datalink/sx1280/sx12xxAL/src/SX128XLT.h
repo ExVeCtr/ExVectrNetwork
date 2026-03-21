@@ -56,6 +56,7 @@ public:
                        uint16_t dio3Mask);
   void setHighSensitivity();
   void setLowPowerRX();
+  void setLongPreamble(bool enable);
   void printModemSettings();
   void printDevice();
   uint32_t getFreqInt();
@@ -145,6 +146,15 @@ public:
                               uint16_t timeout, int8_t txpower, uint8_t wait);
   void writeBuffer(const uint8_t *txbuffer, uint8_t size);
   // void writeBuffer(uint8_t *txbuffer, uint8_t startaddr, uint8_t size);
+
+  /**
+   * @brief Write raw binary data into the SX buffer without appending a null
+   * terminator. Unlike writeBuffer(), every byte in txbuffer is written
+   * faithfully — the last byte is NOT overwritten with 0x00.
+   * Use this for binary payloads when paired with readBuffer(ptr, size).
+   */
+  void writeBufferRaw(const uint8_t *txbuffer, uint8_t size);
+
   uint8_t receiveSXBuffer(uint8_t startaddr, uint16_t timeout, uint8_t wait);
   uint8_t receiveSXBufferIRQ(uint8_t startaddr, uint16_t timeout, uint8_t wait);
   uint8_t readBuffer(uint8_t *rxbuffer);
@@ -158,6 +168,68 @@ public:
   void setFLRCPayloadLengthReg(uint8_t length);
   void setLoRaPayloadLengthReg(uint8_t length);
   void setPayloadLength(uint8_t length);
+
+  //***************************************************************************
+  // LoRa Time-on-Air calculation helpers
+  //***************************************************************************
+
+  /**
+   * @brief Calculate the total number of LoRa symbols for a given payload size,
+   *        using the currently saved modulation and packet parameters.
+   *
+   * This implements the formulas from SX1280 datasheet section 7.4.4.1
+   * (legacy coding rate, i.e. not Long Interleaving).
+   *
+   * @param payloadBytes  Number of application payload bytes.
+   * @return Total symbol count (preamble + header + payload + CRC).
+   */
+  float getLoRaSymbolCount(uint8_t payloadBytes);
+
+  /**
+   * @brief Calculate the LoRa time-on-air in milliseconds for a given payload
+   *        size, using the currently saved modulation and packet parameters.
+   *
+   * @param payloadBytes  Number of application payload bytes.
+   * @return Time-on-air in milliseconds (as float for sub-ms precision).
+   */
+  float getLoRaTimeOnAirMs(uint8_t payloadBytes);
+
+  /**
+   * @brief Calculate the total number of LoRa symbols for fully explicit
+   *        parameters (does not rely on saved state).
+   *
+   * Uses the legacy (non-Long-Interleaving) formula from datasheet 7.4.4.1.
+   *
+   * @param sf             Spreading factor (5 – 12).
+   * @param cr             Coding rate numerator offset (1=4/5, 2=4/6, 3=4/7,
+   * 4=4/8).
+   * @param preambleSymbols Number of preamble symbols.
+   * @param headerType     true = variable/explicit header, false =
+   * fixed/implicit.
+   * @param crcOn          true = 16-bit CRC appended, false = no CRC.
+   * @param payloadBytes   Number of application payload bytes.
+   * @return Total symbol count as float.
+   */
+  static float calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
+                                   uint16_t preambleSymbols, bool headerType,
+                                   bool crcOn, uint8_t payloadBytes);
+
+  /**
+   * @brief Calculate LoRa time-on-air in milliseconds for fully explicit
+   *        parameters.
+   *
+   * @param sf             Spreading factor (5 – 12).
+   * @param bandwidthHz    Bandwidth in Hz (e.g. 812500).
+   * @param cr             Coding rate numerator offset (1=4/5 … 4=4/8).
+   * @param preambleSymbols Number of preamble symbols.
+   * @param headerType     true = variable/explicit, false = fixed/implicit.
+   * @param crcOn          true = CRC on.
+   * @param payloadBytes   Number of application payload bytes.
+   * @return Time-on-air in milliseconds.
+   */
+  static float calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz, uint8_t cr,
+                                   uint16_t preambleSymbols, bool headerType,
+                                   bool crcOn, uint8_t payloadBytes);
 
 private:
   HAL::PinGPIO &_NSS, &_NRESET, &_RFBUSY, &_DIO1;
