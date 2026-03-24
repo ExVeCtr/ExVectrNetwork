@@ -30,6 +30,7 @@ Datalink_SX1280_V2::Datalink_SX1280_V2(SX128XLT &sx1280Driver)
       lora_(sx1280Driver) {
   moduleId_ = moduleCount_++;
   Core::getSystemScheduler().addTask(*this);
+  setPriority(1000);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,10 +69,11 @@ bool Datalink_SX1280_V2::transmitDataframe(const DataPacket &dataframe) {
   // NOTE: We use writeBufferRaw (not writeBuffer) to avoid the library's
   // null-terminator behaviour, which overwrites the last payload byte with
   // 0x00.  writeBufferRaw writes every byte faithfully.
-  lora_.startWriteSXBuffer(0);
-  lora_.writeBufferRaw(dataframe.payload.getPtr(), len);
-  lora_.endWriteSXBuffer();
+  // lora_.startWriteSXBuffer(0);
+  // lora_.writeBufferRaw(dataframe.payload.getPtr(), len);
+  // lora_.endWriteSXBuffer();
 
+  memcpy(txBuffer_, dataframe.payload.getPtr(), len);
   txPendingSize_ = len;
   return true;
 }
@@ -165,6 +167,10 @@ void Datalink_SX1280_V2::setEnableTxRx(bool enable) {
 void Datalink_SX1280_V2::addTransmitFinishedHandler(
     std::function<void()> handler) {
   transmitFinishedHandler_.addHandler(handler);
+}
+
+void Datalink_SX1280_V2::notifyDio1Irq(int64_t timestamp) {
+  irqTrigTimestamp_ = timestamp;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,15 +562,17 @@ void Datalink_SX1280_V2::handleReceivedPacket() {
   // Back-calculate the packet transmission start time from the current time
   // (RX_DONE moment) and the computed on-air time for this packet.
   int64_t airTime = lora_.getLoRaTimeOnAirMs(packetLen) * Core::MILLISECONDS;
-  Serial.printf("[SX1280 %d] Packet airtime %.3f ms, length: %d bytes\n",
-                moduleId_, (double)airTime / Core::MILLISECONDS,
-                (int)packetLen);
+  int64_t airTimeMeas = recvFinishTimestamp_ - receiveStartTimestamp_;
+  // Serial.printf("[SX1280 %d] Packet airtime %.3f ms, length: %d bytes, "
+  //               "measure: %.3f ms\n",
+  //               moduleId_, (double)airTime / Core::MILLISECONDS,
+  //               (int)packetLen, (double)airTimeMeas / Core::MILLISECONDS);
   int64_t rxDoneTime =
       recvFinishTimestamp_ == 0 ? threadStartTime_ : recvFinishTimestamp_;
-  receiveStartTimestamp_ = rxDoneTime - airTime;
+  auto receiveStart = rxDoneTime - airTime;
 
   DataPacket pkt;
-  pkt.timestamp = receiveStartTimestamp_;
+  pkt.timestamp = receiveStart;
   pkt.payload.setSize(packetLen);
 
   lora_.startReadSXBuffer(0);
@@ -601,6 +609,11 @@ void Datalink_SX1280_V2::startTransmit() {
 
   // Apply any pending param changes before transmitting.
   applyParamChanges();
+
+  // Place tx data in buffer
+  lora_.startWriteSXBuffer(0);
+  lora_.writeBufferRaw(txBuffer_, txPendingSize_);
+  lora_.endWriteSXBuffer();
 
   // Compute effective power.
   int8_t power = txPower_ - (int8_t)paDbm_;

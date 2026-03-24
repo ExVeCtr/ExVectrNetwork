@@ -4864,52 +4864,77 @@ float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
                                     uint16_t preambleSymbols, bool headerType,
                                     bool crcOn, uint8_t payloadBytes) {
 
-  // N_bit_CRC: 16 if CRC is activated, 0 otherwise
-  const int32_t nBitCrc = crcOn ? 16 : 0;
-
-  // N_symbol_header: 20 for variable/explicit header, 0 for fixed/implicit
-  const int32_t nSymbolHeader = headerType ? 20 : 0;
-
-  // The base number of non-payload overhead symbols differs by SF range:
-  //   SF < 7  : preamble + 6.25 + 8
-  //   SF >= 7 : preamble + 4.25 + 8
-  const float overhead =
-      static_cast<float>(preambleSymbols) + 8.0f + (sf < 7 ? 6.25f : 4.25f);
-
-  // Compute the payload symbol count.
-  // The numerator and denominator of the ceil() term vary by SF range:
+  // Two formula variants are needed depending on whether a legacy or
+  // Long Interleaving (LI) coding rate is in use.
   //
-  //   SF < 7       : ceil( max(8*PL + CRC - 4*SF     + hdr, 0) / (4*SF    ) ) *
-  //   (CR+4) 7 <= SF <= 10: ceil( max(8*PL + CRC - 4*SF + 8 + hdr, 0) / (4*SF
-  //   ) ) * (CR+4) SF > 10      : ceil( max(8*PL + CRC - 4*(SF-2)+8+ hdr, 0) /
-  //   (4*(SF-2)) ) * (CR+4)
+  // Legacy CR: register values 1–4 (coding rates 4/5 … 4/8)
+  //   Matches the Semtech SX1280 DevKit reference (DemoApplication.cpp).
+  //   SX1280 always has de=1, so denominator is 4*(SF-2).
+  //   nPayload = 8 + max(ceil((8*PL - 4*SF + 28 + 16*crc - 20*ih)
+  //                            / (4*(SF-2))) * (CR+4), 0)
+  //
+  // Long Interleaving: register values 5, 6, 7 (rates 4/5LI, 4/6LI, 4/8LI)
+  //   Matched to the Semtech online LoRa calculator output.
+  //   Denominator is 4*SF, base payload overhead is 7, multiplier is the
+  //   LI rate denominator (5, 6, or 8) directly.
+  //   nPayload = 7 + max(ceil((8*PL - 4*SF + 28 + 16*crc - 20*ih)
+  //                            / (4*SF)) * crLI, 0)
 
-  int32_t numerator;
-  int32_t denominator;
+  const int32_t ih = headerType ? 0 : 1;
+  const int32_t crc16 = crcOn ? 1 : 0;
+  const bool isLongInterleaving = (cr > 4);
 
-  if (sf < 7) {
-    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
-                4 * static_cast<int32_t>(sf) + nSymbolHeader;
-    denominator = 4 * static_cast<int32_t>(sf);
-  } else if (sf <= 10) {
-    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
-                4 * static_cast<int32_t>(sf) + 8 + nSymbolHeader;
-    denominator = 4 * static_cast<int32_t>(sf);
+  const int32_t numerator = 8 * static_cast<int32_t>(payloadBytes) -
+                            4 * static_cast<int32_t>(sf) + 28 + 16 * crc16 -
+                            20 * ih;
+
+  float nPayload;
+
+  if (!isLongInterleaving) {
+    // Legacy coding rate (CR 1–4)
+    const int32_t denominator = 4 * (static_cast<int32_t>(sf) - 2);
+    if (numerator > 0) {
+      nPayload = 8.0f + std::ceil(static_cast<float>(numerator) /
+                                  static_cast<float>(denominator)) *
+                            static_cast<float>(cr + 4);
+    } else {
+      nPayload = 8.0f;
+    }
   } else {
-    // SF 11, 12
-    numerator = 8 * static_cast<int32_t>(payloadBytes) + nBitCrc -
-                4 * (static_cast<int32_t>(sf) - 2) + 8 + nSymbolHeader;
-    denominator = 4 * (static_cast<int32_t>(sf) - 2);
+    // Long Interleaving coding rate
+    // Map register value to the actual LI rate denominator:
+    //   0x05 -> 5 (4/5 LI)
+    //   0x06 -> 6 (4/6 LI)
+    //   0x07 -> 8 (4/8 LI)
+    int32_t crLI;
+    switch (cr) {
+    case 0x05:
+      crLI = 5;
+      break;
+    case 0x06:
+      crLI = 6;
+      break;
+    case 0x07:
+      crLI = 8;
+      break;
+    default:
+      crLI = 6;
+      break; // fallback
+    }
+
+    const int32_t denominator = 4 * static_cast<int32_t>(sf);
+    if (numerator > 0) {
+      nPayload = 7.0f + std::ceil(static_cast<float>(numerator) /
+                                  static_cast<float>(denominator)) *
+                            static_cast<float>(crLI);
+    } else {
+      nPayload = 7.0f;
+    }
   }
 
-  float payloadSymbols = 0.0f;
-  if (numerator > 0) {
-    payloadSymbols = std::ceil(static_cast<float>(numerator) /
-                               static_cast<float>(denominator)) *
-                     static_cast<float>(cr + 4);
-  }
+  const float preambleTotal = static_cast<float>(preambleSymbols) + 4.25f;
 
-  return overhead + payloadSymbols;
+  return preambleTotal + nPayload;
 }
 
 float SX128XLT::calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz,
@@ -4954,6 +4979,32 @@ float SX128XLT::getLoRaTimeOnAirMs(uint8_t payloadBytes) {
 
   return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, explicitHeader, crcOn,
                              payloadBytes);
+}
+
+void SX128XLT::snapshotLoRaParams() {
+  _snapSF = getLoRaSF();
+  _snapBwHz = returnBandwidth(savedModParam2);
+  _snapCR = savedModParam3;
+  _snapPreamble = savedPacketParam1;
+  _snapExplicitHeader = (savedPacketParam2 == 0);
+  _snapCrcOn = (savedPacketParam4 != 0);
+  _snapshotValid = true;
+}
+
+float SX128XLT::getSnapshotLoRaTimeOnAirMs(uint8_t payloadBytes) {
+  if (!_snapshotValid) {
+    return 0.0f;
+  }
+  return calcLoRaTimeOnAirMs(_snapSF, _snapBwHz, _snapCR, _snapPreamble,
+                             _snapExplicitHeader, _snapCrcOn, payloadBytes);
+}
+
+float SX128XLT::getSnapshotLoRaSymbolCount(uint8_t payloadBytes) {
+  if (!_snapshotValid) {
+    return 0.0f;
+  }
+  return calcLoRaSymbolCount(_snapSF, _snapCR, _snapPreamble,
+                             _snapExplicitHeader, _snapCrcOn, payloadBytes);
 }
 
 } // namespace VCTR::network::datalink

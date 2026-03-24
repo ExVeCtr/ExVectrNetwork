@@ -177,9 +177,6 @@ public:
    * @brief Calculate the total number of LoRa symbols for a given payload size,
    *        using the currently saved modulation and packet parameters.
    *
-   * This implements the formulas from SX1280 datasheet section 7.4.4.1
-   * (legacy coding rate, i.e. not Long Interleaving).
-   *
    * @param payloadBytes  Number of application payload bytes.
    * @return Total symbol count (preamble + header + payload + CRC).
    */
@@ -198,14 +195,14 @@ public:
    * @brief Calculate the total number of LoRa symbols for fully explicit
    *        parameters (does not rely on saved state).
    *
-   * Uses the legacy (non-Long-Interleaving) formula from datasheet 7.4.4.1.
+   * Uses the Semtech SX1280 DevKit reference formula which matches the
+   * Semtech online LoRa calculator. The SX1280 always uses de=1 (low data
+   * rate optimization), so the denominator is 4*(SF-2) for all SFs.
    *
    * @param sf             Spreading factor (5 – 12).
-   * @param cr             Coding rate numerator offset (1=4/5, 2=4/6, 3=4/7,
-   * 4=4/8).
+   * @param cr             Coding rate numerator offset (1=4/5, 2=4/6, 3=4/7, 4=4/8).
    * @param preambleSymbols Number of preamble symbols.
-   * @param headerType     true = variable/explicit header, false =
-   * fixed/implicit.
+   * @param headerType     true = variable/explicit header, false = fixed/implicit.
    * @param crcOn          true = 16-bit CRC appended, false = no CRC.
    * @param payloadBytes   Number of application payload bytes.
    * @return Total symbol count as float.
@@ -230,6 +227,36 @@ public:
   static float calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz, uint8_t cr,
                                    uint16_t preambleSymbols, bool headerType,
                                    bool crcOn, uint8_t payloadBytes);
+
+  /**
+   * @brief Take a snapshot of the current LoRa modulation and packet
+   *        parameters for later use in time-on-air calculations.
+   *
+   * Call this while the parameters are known-good (e.g. right after
+   * setupLoRa() or before entering RX). The snapshot is immune to later
+   * calls to setModulationParams() / setPacketParams(), so you can safely
+   * compute the ToA of a received packet even if the radio has already
+   * been reconfigured for the next operation.
+   */
+  void snapshotLoRaParams();
+
+  /**
+   * @brief Calculate time-on-air using the parameters frozen by the last
+   *        call to snapshotLoRaParams().
+   *
+   * @param payloadBytes  Number of application payload bytes.
+   * @return Time-on-air in milliseconds, or 0 if no snapshot was taken.
+   */
+  float getSnapshotLoRaTimeOnAirMs(uint8_t payloadBytes);
+
+  /**
+   * @brief Calculate symbol count using the parameters frozen by the last
+   *        call to snapshotLoRaParams().
+   *
+   * @param payloadBytes  Number of application payload bytes.
+   * @return Total symbol count, or 0 if no snapshot was taken.
+   */
+  float getSnapshotLoRaSymbolCount(uint8_t payloadBytes);
 
 private:
   HAL::PinGPIO &_NSS, &_NRESET, &_RFBUSY, &_DIO1;
@@ -271,6 +298,15 @@ private:
   uint8_t _ReliableErrors; // Reliable status byte
   uint8_t _ReliableFlags;  // Reliable flags byte
   uint8_t _ReliableConfig; // Reliable config byte
+
+  // Snapshot of LoRa parameters for safe ToA calculation after reconfig
+  bool _snapshotValid = false;
+  uint8_t _snapSF;
+  uint32_t _snapBwHz;
+  uint8_t _snapCR;
+  uint16_t _snapPreamble;
+  bool _snapExplicitHeader;
+  bool _snapCrcOn;
 
   HAL::DigitalIO &_spiBus;
 };

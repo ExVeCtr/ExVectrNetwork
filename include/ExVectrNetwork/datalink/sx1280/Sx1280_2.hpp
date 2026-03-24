@@ -96,6 +96,9 @@ public:
 
   void addTransmitFinishedHandler(std::function<void()> handler);
 
+  // --- Interrupt Notify ------------------------------------------------------
+  void notifyDio1Irq(int64_t timestamp);
+
   // --- Task overrides --------------------------------------------------------
   void taskInit() override;
   void taskThread() override;
@@ -131,7 +134,7 @@ private:
   int64_t lastIrqActivityTime_ = 0;   ///< Last time any IRQ bits were read.
   int64_t irqTrigTimestamp_ = 0;      ///< When we first saw DIO1 hig
   int64_t recvFinishTimestamp_ = 0; ///< When RX_DONE was detected (for stats).
-  int64_t recvStartTime_ = 0; ///< When we entered receive mode (for stats).
+  int64_t recvStartTime_ = 0;   ///< When we entered receive mode (for stats).
   int64_t threadStartTime_ = 0; ///< When taskThread() was entered (for stats).
 
   // --- IRQ accumulator -------------------------------------------------------
@@ -144,6 +147,7 @@ private:
 
   // --- TX pending data -------------------------------------------------------
   size_t txPendingSize_ = 0; ///< >0 means data is in the SX buffer.
+  uint8_t txBuffer_[255]; ///< Buffer for tx data.
 
   // --- Last-receive stats ----------------------------------------------------
   int16_t receivedDataRSSI_ = 0;
