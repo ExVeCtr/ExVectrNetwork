@@ -97,7 +97,7 @@ public:
   void addTransmitFinishedHandler(std::function<void()> handler);
 
   // --- Interrupt Notify ------------------------------------------------------
-  void notifyDio1Irq(int64_t timestamp);
+  // void notifyDio1Irq(int64_t timestamp);
 
   // --- Task overrides --------------------------------------------------------
   void taskInit() override;
@@ -146,7 +146,7 @@ private:
   uint16_t irqAccum_ = 0;
 
   // --- TX pending data -------------------------------------------------------
-  size_t txPendingSize_ = 0; ///< >0 means data is in the SX buffer.
+  size_t txPendingSize_ = 0;
   uint8_t txBuffer_[255]; ///< Buffer for tx data.
 
   // --- Last-receive stats ----------------------------------------------------

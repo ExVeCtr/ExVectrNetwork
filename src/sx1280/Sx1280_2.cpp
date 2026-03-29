@@ -72,9 +72,11 @@ bool Datalink_SX1280_V2::transmitDataframe(const DataPacket &dataframe) {
   // lora_.startWriteSXBuffer(0);
   // lora_.writeBufferRaw(dataframe.payload.getPtr(), len);
   // lora_.endWriteSXBuffer();
-
-  memcpy(txBuffer_, dataframe.payload.getPtr(), len);
+  for (size_t i = 0; i < len; i++) {
+    txBuffer_[i] = dataframe.payload[i];
+  }
   txPendingSize_ = len;
+
   return true;
 }
 
@@ -169,9 +171,7 @@ void Datalink_SX1280_V2::addTransmitFinishedHandler(
   transmitFinishedHandler_.addHandler(handler);
 }
 
-void Datalink_SX1280_V2::notifyDio1Irq(int64_t timestamp) {
-  irqTrigTimestamp_ = timestamp;
-}
+// void Datalink_SX1280_V2::notifyDio1Irq() { irqTrigTimestamp_ = Core::NOW(); }
 
 // ---------------------------------------------------------------------------
 // Task: Init
@@ -559,20 +559,31 @@ void Datalink_SX1280_V2::handleReceivedPacket() {
   receivedDataRSSI_ = lora_.readPacketRSSI();
   receivedDataSNR_ = lora_.readPacketSNR();
 
-  // Back-calculate the packet transmission start time from the current time
-  // (RX_DONE moment) and the computed on-air time for this packet.
-  int64_t airTime = lora_.getLoRaTimeOnAirMs(packetLen) * Core::MILLISECONDS;
+  // Use the preamble detection timestamp directly as the packet timestamp.
+  // This was captured by the DIO1 ISR at the moment the preamble was detected
+  // and is far more accurate than back-calculating from RX_DONE minus airtime.
+  // The preamble timestamp has a fixed, deterministic offset from the true TX
+  // start time, which the PLL absorbs as a constant phase bias.
+  //
+  // Fall back to RX_DONE minus airtime only if we somehow missed the preamble
+  // IRQ (receiveStartTimestamp_ == 0).
+  if (receiveStartTimestamp_ == 0) {
+    int64_t airTime = lora_.getLoRaTimeOnAirMs(packetLen) * Core::MILLISECONDS;
+    int64_t rxDoneTime =
+        recvFinishTimestamp_ == 0 ? threadStartTime_ : recvFinishTimestamp_;
+    receiveStartTimestamp_ = rxDoneTime - airTime;
+  }
+
+#ifdef SX1280_DEBUG
   int64_t airTimeMeas = recvFinishTimestamp_ - receiveStartTimestamp_;
-  // Serial.printf("[SX1280 %d] Packet airtime %.3f ms, length: %d bytes, "
-  //               "measure: %.3f ms\n",
-  //               moduleId_, (double)airTime / Core::MILLISECONDS,
-  //               (int)packetLen, (double)airTimeMeas / Core::MILLISECONDS);
-  int64_t rxDoneTime =
-      recvFinishTimestamp_ == 0 ? threadStartTime_ : recvFinishTimestamp_;
-  auto receiveStart = rxDoneTime - airTime;
+  Serial.printf("[SX1280 %d] Packet length: %d bytes, preamble-to-done: "
+                "%.3f ms\n",
+                moduleId_, (int)packetLen,
+                (double)airTimeMeas / Core::MILLISECONDS);
+#endif
 
   DataPacket pkt;
-  pkt.timestamp = receiveStart;
+  pkt.timestamp = receiveStartTimestamp_;
   pkt.payload.setSize(packetLen);
 
   lora_.startReadSXBuffer(0);
@@ -610,15 +621,15 @@ void Datalink_SX1280_V2::startTransmit() {
   // Apply any pending param changes before transmitting.
   applyParamChanges();
 
-  // Place tx data in buffer
-  lora_.startWriteSXBuffer(0);
-  lora_.writeBufferRaw(txBuffer_, txPendingSize_);
-  lora_.endWriteSXBuffer();
-
   // Compute effective power.
   int8_t power = txPower_ - (int8_t)paDbm_;
   if (power > maxTxPower_)
     power = maxTxPower_;
+
+  // Place the payload into the SX1280's internal buffer.
+  lora_.startWriteSXBuffer(0);
+  lora_.writeBufferRaw(txBuffer_, txPendingSize_);
+  lora_.endWriteSXBuffer();
 
   // Configure buffer and payload length.
   lora_.setBufferBaseAddress(0, 0);
