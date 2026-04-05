@@ -15,6 +15,9 @@ namespace VCTR::network::datalink {
 class RadioI : public VCTR::network::datalink::DatalinkI,
                public VCTR::network::physical::HasChannels {
 public:
+  /// @brief SNR of the last successfully received packet (dB).
+  /// Override in implementations that can provide RF metrics.
+  virtual int16_t lastPacketSNR() const = 0;
 };
 
 } // namespace VCTR::network::datalink

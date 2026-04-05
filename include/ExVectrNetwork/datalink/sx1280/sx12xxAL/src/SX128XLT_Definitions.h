@@ -356,7 +356,7 @@
 #define RETAIN_None 0x00
 
 #ifndef RAMP_TIME
-#define RAMP_TIME RADIO_RAMP_02_US
+#define RAMP_TIME RADIO_RAMP_10_US
 #endif
 
 #ifndef PERIODBASE

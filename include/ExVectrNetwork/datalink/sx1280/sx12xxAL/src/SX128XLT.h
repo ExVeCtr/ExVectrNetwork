@@ -37,7 +37,7 @@ public:
   void resetDevice();
   bool checkDevice();
   void setupLoRa(uint32_t frequency, int32_t offset, uint8_t modParam1,
-                 uint8_t modParam2, uint8_t modParam3);
+                 uint8_t modParam2, uint8_t modParam3, bool enableCrc = false);
   void setMode(uint8_t modeconfig);
   void setRegulatorMode(uint8_t mode);
   void setPacketType(uint8_t PacketType);
@@ -112,6 +112,19 @@ public:
   //***************************************************************************
   // Start direct access SX buffer routines
   //***************************************************************************
+
+  /**
+   * A simple quick efficient write to the sx buffer.
+   * Auto starts and stops the write operation.
+   */
+  void directWriteSXBuffer(uint8_t address, const uint8_t *data, uint8_t len);
+
+  /**
+   * A simple quick efficient read from the sx buffer.
+   * Auto starts and stops the read operation.
+   */
+  void directReadSXBuffer(uint8_t address, uint8_t *data, uint8_t len);
+
   void startWriteSXBuffer(uint8_t ptr);
   uint8_t endWriteSXBuffer();
   void startReadSXBuffer(uint8_t ptr);
@@ -200,9 +213,11 @@ public:
    * rate optimization), so the denominator is 4*(SF-2) for all SFs.
    *
    * @param sf             Spreading factor (5 – 12).
-   * @param cr             Coding rate numerator offset (1=4/5, 2=4/6, 3=4/7, 4=4/8).
+   * @param cr             Coding rate numerator offset (1=4/5, 2=4/6, 3=4/7,
+   * 4=4/8).
    * @param preambleSymbols Number of preamble symbols.
-   * @param headerType     true = variable/explicit header, false = fixed/implicit.
+   * @param headerType     true = variable/explicit header, false =
+   * fixed/implicit.
    * @param crcOn          true = 16-bit CRC appended, false = no CRC.
    * @param payloadBytes   Number of application payload bytes.
    * @return Total symbol count as float.

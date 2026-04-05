@@ -62,12 +62,8 @@ public:
   Datalink_SX1280_V2(SX128XLT &sx1280Driver);
 
   // --- Getters ---------------------------------------------------------------
-  int16_t lastPacketRSSI() const { return receivedDataRSSI_; }
-  int16_t lastPacketSNR() const { return receivedDataSNR_; }
-
-  /// Timestamp (Core::NOW() units) of when the last preamble was detected.
-  /// Useful for FHSS synchronisation in higher layers.
-  int64_t lastReceiveStartTimestamp() const { return receiveStartTimestamp_; }
+  int16_t lastPacketRSSI() const { return receivedDataRSSI; }
+  int16_t lastPacketSNR() const { return receivedDataSNR; }
 
   // --- RadioI / DatalinkI overrides ------------------------------------------
   size_t getMaxPacketSize() const override;
@@ -88,6 +84,10 @@ public:
   /// Sets the dB the external PA adds to the output power.
   void setPAdbm(uint8_t paDbm);
 
+  uint16_t getRemainIrqFlags() const { return irqStatusRemain; }
+  void clearRemainIrqFlags() { irqStatusRemain = 0; }
+
+  SX128XLT &getRadio() { return lora; }
   /**
    * @brief Enable or disable all radio activity.
    * When disabled the radio is placed in STDBY.
@@ -97,7 +97,8 @@ public:
   void addTransmitFinishedHandler(std::function<void()> handler);
 
   // --- Interrupt Notify ------------------------------------------------------
-  // void notifyDio1Irq(int64_t timestamp);
+  void notifyDio1Irq(int64_t timestamp, bool force = false);
+  void fetchIrqFlags();
 
   // --- Task overrides --------------------------------------------------------
   void taskInit() override;
@@ -106,97 +107,134 @@ public:
 
 private:
   // --- Constants -------------------------------------------------------------
-  static constexpr size_t kMaxFrameLength = 200;
+  static constexpr size_t kMaxFrameLength = 128;
 
-  static constexpr uint8_t kNumChannels = 10;
-  static constexpr uint32_t kMinFreq = 2410000000UL;
-  static constexpr uint32_t kMaxFreq = 2470000000UL;
+  static constexpr uint8_t kNumChannels = 16;
+  static constexpr uint32_t kMinFreq = 2425000000UL;
+  static constexpr uint32_t kMaxFreq = 2475000000UL;
   static constexpr uint32_t kChannelSpacing =
       (kMaxFreq - kMinFreq) / (kNumChannels - 1);
 
-  static uint8_t moduleCount_;
+  static uint8_t moduleCount;
 
   // --- Radio states ----------------------------------------------------------
-  enum class State { Idle, Receiving, Transmitting };
+  enum class State { Sleep, Idle, IdleReceive, Receiving, Transmitting };
 
   // --- Hardware --------------------------------------------------------------
-  SX128XLT &lora_;
+  SX128XLT &lora;
 
   // --- State -----------------------------------------------------------------
-  State state_ = State::Idle;
-  bool enableTxRx_ =
-      false; /// True from preamble-detected until RX_DONE / error / enterRx().
-  /// Exposed via isChannelBlocked() so higher layers can detect active RX.
-  bool preambleActive_ = false;
-  // --- Timestamps (nanoseconds, Core::NOW() units) ---------------------------
-  int64_t receiveStartTimestamp_ = 0; ///< Preamble-detect time for FHSS.
-  int64_t transmitStartTime_ = 0;     ///< When TX was started (for timeout).
-  int64_t lastIrqActivityTime_ = 0;   ///< Last time any IRQ bits were read.
-  int64_t irqTrigTimestamp_ = 0;      ///< When we first saw DIO1 hig
-  int64_t recvFinishTimestamp_ = 0; ///< When RX_DONE was detected (for stats).
-  int64_t recvStartTime_ = 0;   ///< When we entered receive mode (for stats).
-  int64_t threadStartTime_ = 0; ///< When taskThread() was entered (for stats).
+  State state = State::Sleep;
+  bool enableTxRx = false;
+  bool isEnableTxRx = false;
 
-  // --- IRQ accumulator -------------------------------------------------------
-  /// Hardware IRQ bits are cleared immediately after reading (to prevent DIO1
-  /// staying high and causing a tight poll loop). The bits are OR-ed into this
-  /// accumulator so the state machine can still see the full picture across
-  /// multiple reads within one receive/transmit cycle.  Reset on every state
-  /// transition (enterRx / startTransmit).
-  uint16_t irqAccum_ = 0;
+  // --- IRQ Flags--------------------------------------------
+  int64_t irqTrigTimestamp = 0;
+  bool preambleDetected = false;
+  bool headerValid = false;
+  bool headerError = false;
+  bool crcError = false;
+  bool rxDone = false;
+  bool txDone = false;
+  bool rxTxTimeout = false;
 
-  // --- TX pending data -------------------------------------------------------
-  size_t txPendingSize_ = 0;
-  uint8_t txBuffer_[255]; ///< Buffer for tx data.
+  // --- Timestamps ------------------------------------------------
+  int64_t txStartTimestamp = 0;
+  int64_t txDoneTimestamp = 0;
+  int64_t rxStartTimestamp = 0;
+  int64_t rxDoneTimestamp = 0;
+  int64_t rxIdleStartTimestamp = 0;
+
+  // --- Timeouts ------------------------------------------------
+  int64_t rxActiveTimeout = 2000 * Core::MILLISECONDS;
+  int64_t txActiveTimeout = 7000 * Core::MILLISECONDS;
+
+  // --- TX pending data ----------------------------------
+  uint8_t txBuffer[kMaxFrameLength];
+  size_t txPendingSize = 0;
+  size_t sxTxPendingSize = 0;
+  int64_t txScheduledTime = 0;
 
   // --- Last-receive stats ----------------------------------------------------
-  int16_t receivedDataRSSI_ = 0;
-  int16_t receivedDataSNR_ = 0;
+  int16_t receivedDataRSSI = 0;
+  int16_t receivedDataSNR = 0;
 
   // --- TX power settings -----------------------------------------------------
-  int8_t txPower_ = 0;
-  int8_t maxTxPower_ = 12;
-  uint8_t paDbm_ = 0;
+  int8_t txPower = 0;
+  int8_t lastTxPower = 0;
+  int8_t maxTxPower = 12;
+  uint8_t paGain = 0;
 
   // --- Modulation / frequency config -----------------------------------------
-  bool modParamsChanged_ = true;
-  bool freqChanged_ = true;
-  SX1280_SF spreadingFactor_ = SX1280_SF::SF_8;
-  SX1280_BW bandwidth_ = SX1280_BW::BW_800KHz;
-  SX1280_CR codingRate_ = SX1280_CR::LI_4_8;
-  uint32_t freq_hz_ = kMinFreq;
+  bool modParamsChanged = true;
+  bool freqChanged = true;
+  SX1280_SF spreadingFactor = SX1280_SF::SF_8;
+  SX1280_BW bandwidth = SX1280_BW::BW_800KHz;
+  SX1280_CR codingRate = SX1280_CR::LI_4_8;
+  uint32_t freq_hz = kMinFreq;
 
-  SX1280_SF spreadingFactorLast_ = SX1280_SF::SF_8;
-  SX1280_BW bandwidthLast_ = SX1280_BW::BW_800KHz;
-  SX1280_CR codingRateLast_ = SX1280_CR::LI_4_8;
-  uint32_t freqLast_hz_ = kMinFreq;
+  uint16_t irqStatusRemain = 0;
 
   // --- Channel ---------------------------------------------------------------
-  uint8_t currentChannel_ = 0;
+  uint8_t currentChannel = 0;
 
   // --- Debug -----------------------------------------------------------------
-  uint8_t moduleId_ = 0;
+  uint8_t moduleId = 0;
+  int64_t lastTxPrint = 0;
 
   // --- Handlers --------------------------------------------------------------
-  Core::HandlerGroup<> transmitFinishedHandler_;
+  Core::HandlerGroup<> transmitFinishedHandler;
 
   // --- Private helpers -------------------------------------------------------
 
-  /// Calculate the on-air time (in nanoseconds) of a LoRa packet given the
-  /// current modulation parameters and the payload size in bytes.
-  int64_t calcPacketAirtime(size_t payloadBytes) const;
+  bool isActivelyReceiving() const;
+  bool receiveFlagTrig() const;
+  bool isTxReady() const;
 
-  /// Apply any pending modulation / frequency changes while in STDBY.
-  void applyParamChanges();
+  void clearReceiveFlags();
+  void clearAllIrqFlags();
 
-  /// Enter continuous receive mode (timeout = 0xFFFF).
-  void enterRx();
+  void applyLoraParams();
 
-  /// Read a completed packet from the radio buffer and dispatch it.
-  void handleReceivedPacket();
+  void applyFreqChange();
 
-  /// Start transmitting the data already in the SX buffer.
-  void startTransmit();
+  /**
+   * Prepares the radio for transmission by placing data onto module and setting
+   * parameters. Call startTx() to actually start transmission after this. Use
+   * txStart to specify exactly when the transmission should start begin.
+   */
+  void prepareTx(const uint8_t *data, size_t size, int64_t txStart = 0);
+
+  /**
+   * Starts the transmission the that been prepared by prepareTx().
+   * Will not wait till the txStart.
+   */
+  void startTx();
+
+  /**
+   * Puts the radio into RX mode.
+   */
+  void startIdleRx();
+
+  /**
+   * Puts the radio into active receiving mode
+   */
+  void startActiveRx();
+
+  /**
+   * Gets the data received from the radio and calls handlers.
+   */
+  void retrieveRxData();
+
+  // --- State machine helpers ------------------------------------
+
+  void updateReceiveState();
+
+  void updateTransmitState();
+
+  void updateIdleRxState();
+
+  void updateIdleState();
 };
 
 } // namespace VCTR::network::datalink

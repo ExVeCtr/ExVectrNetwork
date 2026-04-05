@@ -19,7 +19,7 @@ namespace VCTR::network::datalink {
 // Static
 // ---------------------------------------------------------------------------
 
-uint8_t Datalink_SX1280_V2::moduleCount_ = 0;
+uint8_t Datalink_SX1280_V2::moduleCount = 0;
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -27,8 +27,8 @@ uint8_t Datalink_SX1280_V2::moduleCount_ = 0;
 
 Datalink_SX1280_V2::Datalink_SX1280_V2(SX128XLT &sx1280Driver)
     : Task_Periodic("Datalink_SX1280_V2", 100 * Core::MILLISECONDS),
-      lora_(sx1280Driver) {
-  moduleId_ = moduleCount_++;
+      lora(sx1280Driver) {
+  moduleId = moduleCount++;
   Core::getSystemScheduler().addTask(*this);
   setPriority(1000);
 }
@@ -40,66 +40,58 @@ Datalink_SX1280_V2::Datalink_SX1280_V2(SX128XLT &sx1280Driver)
 size_t Datalink_SX1280_V2::getMaxPacketSize() const { return kMaxFrameLength; }
 
 bool Datalink_SX1280_V2::isChannelBlocked() const {
-  return state_ == State::Transmitting || txPendingSize_ > 0 || !enableTxRx_ ||
-         preambleActive_;
+  bool blocked = txScheduledTime != 0 || txPendingSize > 0 || !enableTxRx;
+
+  if (blocked) {
+    // Serial.printf("[SX1280 %d] %.3f Channel is blocked by %s%s%s\n",
+    // moduleId,
+    //               (double)Core::NOW() / Core::SECONDS,
+    //               txScheduledTime != 0 ? "scheduled TX " : "",
+    //               txPendingSize > 0 ? "pending TX " : "",
+    //               !enableTxRx ? "TX disabled" : "");
+  }
+  return blocked;
 }
 
 bool Datalink_SX1280_V2::transmitDataframe(const DataPacket &dataframe) {
-  if (!enableTxRx_ || txPendingSize_ > 0) {
+  if (isChannelBlocked()) {
     return false;
   }
 
   auto len = dataframe.payload.size();
   if (len > kMaxFrameLength) {
 #ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] Frame too large (%d > %d)\n", moduleId_,
-                  (int)len, (int)kMaxFrameLength);
+    Serial.printf("[SX1280 %d] Frame too large (%d > %d)\n", moduleId, (int)len,
+                  (int)kMaxFrameLength);
 #endif
     return false;
   }
 
-#ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] Queued %d bytes for TX\n", moduleId_, (int)len);
-#endif
+  auto scheduledTxTime =
+      dataframe.timestamp == 0 ? Core::NOW() : dataframe.timestamp;
 
-  // Write the payload into the SX1280's internal buffer while we are still
-  // in whatever mode we are in. The buffer is a separate memory space and
-  // can be written at any time.
-  //
-  // NOTE: We use writeBufferRaw (not writeBuffer) to avoid the library's
-  // null-terminator behaviour, which overwrites the last payload byte with
-  // 0x00.  writeBufferRaw writes every byte faithfully.
-  // lora_.startWriteSXBuffer(0);
-  // lora_.writeBufferRaw(dataframe.payload.getPtr(), len);
-  // lora_.endWriteSXBuffer();
-  for (size_t i = 0; i < len; i++) {
-    txBuffer_[i] = dataframe.payload[i];
+  if (sxTxPendingSize == 0 &&
+      (state == State::Idle || state == State::IdleReceive)) {
+    prepareTx(dataframe.payload.getPtr(), dataframe.payload.size(),
+              scheduledTxTime);
+  } else {
+    memcpy(txBuffer, dataframe.payload.getPtr(), len);
+    txPendingSize = len;
+    txScheduledTime = scheduledTxTime;
   }
-  txPendingSize_ = len;
 
   return true;
 }
 
 size_t Datalink_SX1280_V2::getNumChannels() const { return kNumChannels; }
-size_t Datalink_SX1280_V2::getCurrentChannel() const { return currentChannel_; }
+size_t Datalink_SX1280_V2::getCurrentChannel() const { return currentChannel; }
 
 void Datalink_SX1280_V2::setChannel(size_t channel) {
   channel = channel % kNumChannels;
-  currentChannel_ = channel;
-  freqLast_hz_ = freq_hz_;
-  freq_hz_ = kMinFreq + channel * kChannelSpacing;
+  currentChannel = channel;
+  freq_hz = kMinFreq + channel * kChannelSpacing;
 
-  // Apply the frequency change immediately if the radio is idle-receiving
-  // (no preamble in progress, not transmitting, DIO1 clear).  This avoids
-  // a 1-5 ms scheduling delay that would otherwise eat into the FHSS hop
-  // advance margin on every single hop.
-  if (enableTxRx_ && state_ == State::Receiving && !preambleActive_ &&
-      !lora_.getDio1State() && txPendingSize_ == 0) {
-    freqChanged_ = true;
-    enterRx(); // STDBY → apply freq → back to RX, ~200 µs via SPI
-  } else {
-    freqChanged_ = true; // defer to next task cycle
-  }
+  freqChanged = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,80 +99,50 @@ void Datalink_SX1280_V2::setChannel(size_t channel) {
 // ---------------------------------------------------------------------------
 
 void Datalink_SX1280_V2::setFrequency(uint32_t freq_hz) {
-  freqChanged_ = true;
-  freqLast_hz_ = freq_hz_;
-  freq_hz_ = freq_hz;
+  freqChanged = true;
+  freq_hz = freq_hz;
 }
 
 void Datalink_SX1280_V2::setSpreadingFactor(SX1280_SF sf) {
-  modParamsChanged_ = true;
-  spreadingFactorLast_ = spreadingFactor_;
-  spreadingFactor_ = sf;
+  modParamsChanged = true;
+  spreadingFactor = sf;
 }
 
 void Datalink_SX1280_V2::setBandwidth(SX1280_BW bw) {
-  modParamsChanged_ = true;
-  bandwidthLast_ = bandwidth_;
-  bandwidth_ = bw;
+  modParamsChanged = true;
+  bandwidth = bw;
 }
 
 void Datalink_SX1280_V2::setCodingRate(SX1280_CR cr) {
-  modParamsChanged_ = true;
-  codingRateLast_ = codingRate_;
-  codingRate_ = cr;
+  modParamsChanged = true;
+  codingRate = cr;
 }
 
-void Datalink_SX1280_V2::setTxPower(int8_t power) { txPower_ = power; }
+void Datalink_SX1280_V2::setTxPower(int8_t power) { txPower = power; }
 
 void Datalink_SX1280_V2::setTxMaxPower(int8_t maxTxPower) {
-  maxTxPower_ = maxTxPower;
+  maxTxPower = maxTxPower;
 }
 
-void Datalink_SX1280_V2::setPAdbm(uint8_t paDbm) { paDbm_ = paDbm; }
+void Datalink_SX1280_V2::setPAdbm(uint8_t paDbm) { paGain = paDbm; }
 
-void Datalink_SX1280_V2::setEnableTxRx(bool enable) {
-  if (enable && enableTxRx_) {
-    // Already enabled — do nothing.  Calling enterRx() here would abort
-    // an ongoing reception or transmission.
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] setEnableTxRx(true) — already enabled, "
-                  "ignoring\n",
-                  moduleId_);
-#endif
-    return;
-  }
-
-  enableTxRx_ = enable;
-  if (!enable) {
-    lora_.setMode(MODE_STDBY_RC);
-    state_ = State::Idle;
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] setEnableTxRx(false) — radio disabled\n",
-                  moduleId_);
-#endif
-  } else {
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] setEnableTxRx(true) — enabling\n", moduleId_);
-#endif
-    enterRx();
-  }
-}
+void Datalink_SX1280_V2::setEnableTxRx(bool enable) { enableTxRx = enable; }
 
 void Datalink_SX1280_V2::addTransmitFinishedHandler(
     std::function<void()> handler) {
-  transmitFinishedHandler_.addHandler(handler);
+  transmitFinishedHandler.addHandler(handler);
 }
 
-// void Datalink_SX1280_V2::notifyDio1Irq() { irqTrigTimestamp_ = Core::NOW(); }
-
-// ---------------------------------------------------------------------------
-// Task: Init
-// ---------------------------------------------------------------------------
+void Datalink_SX1280_V2::notifyDio1Irq(int64_t timestamp, bool force) {
+  if (force || irqTrigTimestamp == 0) {
+    irqTrigTimestamp = timestamp;
+  }
+}
 
 void Datalink_SX1280_V2::taskInit() {
-  if (!lora_.checkDevice()) {
+  if (!lora.checkDevice()) {
 #ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] Device check FAILED\n", moduleId_);
+    Serial.printf("[SX1280 %d] Device check FAILED\n", moduleId);
 #endif
     setInitialised(false);
     this->setRelease(Core::NOW() + 1 * Core::SECONDS);
@@ -188,463 +150,360 @@ void Datalink_SX1280_V2::taskInit() {
   }
 
 #ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] Device found, configuring\n", moduleId_);
+  Serial.printf("[SX1280 %d] Device found, configuring\n", moduleId);
 #endif
 
-  lora_.setupLoRa(freq_hz_, 0, spreadingFactor_, bandwidth_, codingRate_);
-  lora_.setLongPreamble(true);
-  lora_.setHighSensitivity();
+  lora.setupLoRa(freq_hz, 0, spreadingFactor, bandwidth, codingRate, false);
+  lora.setHighSensitivity();
+  lora.setBufferBaseAddress(128, 0);
+  lora.setDioIrqParams(IRQ_RADIO_ALL,
+                       (IRQ_TX_DONE /* | IRQ_PREAMBLE_DETECTED*/ | IRQ_RX_DONE |
+                        IRQ_RX_TX_TIMEOUT),
+                       0, 0);
 
   // Mark as applied so enterRx() doesn't redo them immediately.
-  modParamsChanged_ = false;
-  freqChanged_ = false;
+  modParamsChanged = false;
+  freqChanged = false;
 
-  state_ = State::Idle;
-  if (enableTxRx_) {
-    enterRx();
-  }
+  state = State::Idle;
 }
-
-// ---------------------------------------------------------------------------
-// Task: Check  (called frequently between threads to allow early wake)
-// ---------------------------------------------------------------------------
 
 void Datalink_SX1280_V2::taskCheck() {
-  // Wake the task immediately when there is work to do:
-  //  - DIO1 high means a radio IRQ is pending (RX_DONE, TX_DONE, etc.)
-  //  - txPendingSize_ > 0 means data is queued for transmission
-  //  - param/freq changes need to be applied
-  auto irqState = lora_.getDio1State();
-  if (irqState && irqTrigTimestamp_ == 0) {
-    irqTrigTimestamp_ = Core::NOW();
-  }
-  if (irqState || txPendingSize_ > 0 || modParamsChanged_ || freqChanged_) {
-    setRelease(Core::NOW());
+
+  bool paramsUpdate = (modParamsChanged || freqChanged) &&
+                      (state == State::Idle || state == State::IdleReceive);
+  bool irqTrig = irqTrigTimestamp != 0;
+  bool rxReady = receiveFlagTrig();
+  bool txReady =
+      isTxReady() && (state == State::Idle || state == State::IdleReceive);
+  bool txPrepare =
+      txPendingSize > 0 && sxTxPendingSize == 0 && (state != State::Receiving);
+  // Only leave idle if there's no pending TX waiting for its scheduled time.
+  bool txWaiting = sxTxPendingSize > 0 && !isTxReady();
+  bool leaveIdle = state == State::Idle && !txWaiting;
+
+  if (paramsUpdate || irqTrig || rxReady || txReady || txPrepare || leaveIdle ||
+      txDone) {
+    setDeadline(Core::NOW());
+  } else if (txWaiting) {
+    // Wake up at the TX scheduled time rather than busy-looping.
+    setDeadline(txScheduledTime);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Task: Thread  (the main periodic body)
-// ---------------------------------------------------------------------------
 
 void Datalink_SX1280_V2::taskThread() {
-  if (!enableTxRx_) {
-    return;
-  }
 
-  threadStartTime_ = Core::NOW();
+  auto threadStartTime = Core::NOW();
 
-  // ------------------------------------------------------------------
-  // 1. Read and *immediately clear* any pending hardware IRQ bits.
-  //
-  //    We clear ONLY the bits we just read.  If a new event (e.g.
-  //    IRQ_RX_DONE) fires between our read and our clear, its bit is
-  //    NOT in our mask and therefore survives the clear — no lost
-  //    events.
-  //
-  //    Clearing is essential: without it DIO1 stays permanently high,
-  //    taskCheck() continuously calls setRelease(NOW()), and we spin-
-  //    read the SPI bus hundreds of times per millisecond.  That
-  //    aggressive polling during an active reception can push the
-  //    SX1280 into an anomalous state where it stops generating
-  //    IRQ_RX_DONE after a few packets.
-  //
-  //    Because intermediate events (PREAMBLE_DETECTED → HEADER_VALID
-  //    → RX_DONE) arrive on separate DIO1 edges now, we OR every read
-  //    into irqAccum_ so the state machine sees the full picture.
-  //    The accumulator is reset on every state transition (enterRx /
-  //    startTransmit).
-  // ------------------------------------------------------------------
-  uint16_t irq = 0;
-  if (lora_.getDio1State()) {
-    irq = lora_.readIrqStatus();
-    lora_.clearIrqStatus(irq);
-  }
-  irqAccum_ |= irq;
+  fetchIrqFlags();
 
-  // Track when we last saw any IRQ activity (for the watchdog).
-  if (irq != 0) {
-    lastIrqActivityTime_ = threadStartTime_;
+  // Serial.printf("%.3f State: %d\n", Core::NOWSeconds(), state);
 
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] IRQ 0x%04X  accum 0x%04X\n", moduleId_, irq,
-                  irqAccum_);
-#endif
-  }
+  switch (state) {
+    // In receive mode but not actively receiving a packet. Waiting for
+    // preamble.
+  case State::IdleReceive:
+    updateIdleRxState();
+    break;
 
-  // ------------------------------------------------------------------
-  // 2. Handle events based on current state.
-  // ------------------------------------------------------------------
-  switch (state_) {
-
-  // --- RECEIVING -----------------------------------------------------
+  // Actively receiving a packet. Waiting for RX_DONE or timeout.
   case State::Receiving: {
-    // Record preamble-detect timestamp (for FHSS sync).
-    // Use freshly-read `irq` so we capture the time of the *first*
-    // detection, not a later poll where the bit is only in the accum.
-    if (irq & IRQ_PREAMBLE_DETECTED) {
-#ifdef SX1280_DEBUG
-      Serial.printf("[SX1280 %d] Preamble detected\n", moduleId_);
-#endif
-      receiveStartTimestamp_ = irqTrigTimestamp_;
-      preambleActive_ = true;
-    }
-
-    // Packet fully received.
-    if ((irqAccum_ & IRQ_RX_DONE) && (irqAccum_ & IRQ_HEADER_VALID) &&
-        !(irqAccum_ & IRQ_CRC_ERROR)) {
-#ifdef SX1280_DEBUG
-      Serial.printf("[SX1280 %d] RX_DONE — valid packet\n", moduleId_);
-#endif
-      recvFinishTimestamp_ = irqTrigTimestamp_;
-      handleReceivedPacket();
-      enterRx(); // back to continuous RX
-      break;
-    }
-
-    // Errors — discard and restart RX.
-    if (irqAccum_ & (IRQ_HEADER_ERROR | IRQ_CRC_ERROR | IRQ_RX_TIMEOUT)) {
-      preambleActive_ = false;
-#ifdef SX1280_DEBUG
-      if (irqAccum_ & IRQ_HEADER_ERROR)
-        Serial.printf("[SX1280 %d] Header error\n", moduleId_);
-      if (irqAccum_ & IRQ_CRC_ERROR)
-        Serial.printf("[SX1280 %d] CRC error\n", moduleId_);
-      if (irqAccum_ & IRQ_RX_TIMEOUT)
-        Serial.printf("[SX1280 %d] RX timeout\n", moduleId_);
-#endif
-      enterRx();
-      break;
-    }
-
-    // Software watchdog — if we started accumulating IRQ bits (e.g.
-    // preamble detected) but never got RX_DONE or an error, the radio
-    // may be stuck.  Force a restart after 500 ms of inactivity.
-    if (irqAccum_ != 0 &&
-        (threadStartTime_ - lastIrqActivityTime_) > 500 * Core::MILLISECONDS) {
-#ifdef SX1280_DEBUG
-      Serial.printf("[SX1280 %d] Watchdog — stale accum 0x%04X, restarting "
-                    "RX\n",
-                    moduleId_, irqAccum_);
-#endif
-      enterRx();
-      break;
-    }
-
-    // If params changed while idle-receiving (no packet in flight),
-    // restart RX so the new params take effect.
-    if ((modParamsChanged_ || freqChanged_) &&
-        !(irqAccum_ & IRQ_PREAMBLE_DETECTED)) {
-      enterRx();
-      break;
-    }
-
-    // If we have data to send AND no packet is currently being received,
-    // switch to transmit.
-    if (txPendingSize_ > 0 && !(irqAccum_ & IRQ_PREAMBLE_DETECTED) &&
-        !(irqAccum_ & IRQ_HEADER_VALID)) {
-      startTransmit();
-    }
+    updateReceiveState();
     break;
   }
 
-  // --- TRANSMITTING --------------------------------------------------
+  // Actively transmitting a packet. Waiting for TX_DONE or timeout.
   case State::Transmitting: {
-    if (irqAccum_ & IRQ_TX_DONE) {
-#ifdef SX1280_DEBUG
-      Serial.printf("[SX1280 %d] TX_DONE\n", moduleId_);
-#endif
-      transmitFinishedHandler_.callHandlers();
-      enterRx();
-      break;
-    }
-
-    // TX timeout safety net.
-    if ((irqAccum_ & IRQ_TX_TIMEOUT) ||
-        (threadStartTime_ - transmitStartTime_ > 500 * Core::MILLISECONDS)) {
-#ifdef SX1280_DEBUG
-      Serial.printf("[SX1280 %d] TX timeout\n", moduleId_);
-#endif
-      lora_.setMode(MODE_STDBY_RC);
-      enterRx();
-    }
+    updateTransmitState();
     break;
   }
 
-  // --- IDLE (should not stay here long) ------------------------------
   case State::Idle:
-  default:
-    enterRx();
+  case State::Sleep:
+  default: {
+    updateIdleState();
     break;
   }
+  }
 
-  irqTrigTimestamp_ = 0; // reset for next DIO1 event
+  if (txPendingSize > 0 && sxTxPendingSize == 0 &&
+      (state == State::Idle || state == State::IdleReceive)) {
+    prepareTx(txBuffer, txPendingSize, txScheduledTime);
+  }
+
+  irqTrigTimestamp = 0; // reset for next DIO1 event
+  // clearAllIrqFlags();
 }
 
-// ---------------------------------------------------------------------------
-// Private: Calculate LoRa packet airtime (nanoseconds)
-// ---------------------------------------------------------------------------
+void Datalink_SX1280_V2::fetchIrqFlags() {
 
-int64_t Datalink_SX1280_V2::calcPacketAirtime(size_t payloadBytes) const {
-  // Derive numeric SF from the register value (0x50 = SF5 … 0xC0 = SF12).
-  const int sf = static_cast<uint8_t>(spreadingFactor_) >> 4;
+  int64_t now = Core::NOW();
 
-  // Derive bandwidth in Hz from the register value.
-  double bw_hz;
-  switch (static_cast<uint8_t>(bandwidth_)) {
-  case LORA_BW_0200:
-    bw_hz = 203125.0;
-    break;
-  case LORA_BW_0400:
-    bw_hz = 406250.0;
-    break;
-  case LORA_BW_0800:
-    bw_hz = 812500.0;
-    break;
-  case LORA_BW_1600:
-    bw_hz = 1625000.0;
-    break;
-  default:
-    bw_hz = 812500.0;
-    break;
+  // Read dio1 if its not been done yet.
+  if (irqTrigTimestamp == 0) {
+    irqTrigTimestamp = now;
   }
 
-  // Derive coding-rate denominator from the register value.
-  // CR 4/5 = 0x01, 4/6 = 0x02, 4/7 = 0x03, 4/8 = 0x04
-  // LI 4/5 = 0x05, LI 4/6 = 0x06, LI 4/8 = 0x07
-  int cr_denom;
-  switch (static_cast<uint8_t>(codingRate_)) {
-  case LORA_CR_4_5:
-  case LORA_CR_LI_4_5:
-    cr_denom = 5;
-    break;
-  case LORA_CR_4_6:
-  case LORA_CR_LI_4_6:
-    cr_denom = 6;
-    break;
-  case LORA_CR_4_7:
-    cr_denom = 7;
-    break;
-  case LORA_CR_4_8:
-  case LORA_CR_LI_4_8:
-    cr_denom = 8;
-    break;
-  default:
-    cr_denom = 8;
-    break;
+  auto irqStatus = lora.readIrqStatus();
+  auto irqStatusSeen = 0;
+
+  if (irqStatus & IRQ_PREAMBLE_DETECTED) {
+    irqStatusSeen |= IRQ_PREAMBLE_DETECTED;
+    preambleDetected = true;
+    rxStartTimestamp = irqTrigTimestamp;
   }
 
-  // Symbol time in seconds: T_sym = 2^SF / BW
-  const double t_sym = (double)(1 << sf) / bw_hz;
-
-  // Preamble time.  We use 12 preamble symbols (from setPacketParams) plus
-  // the SX1280 adds 4.25 symbols overhead.
-  const double n_preamble = 12.0;
-  const double t_preamble = (n_preamble + 4.25) * t_sym;
-
-  // Payload symbol count (Semtech SX1280 datasheet formula).
-  // explicitHeader = true (variable-length packets), CRC on.
-  const int pl = static_cast<int>(payloadBytes);
-  const int crcBits = 16;    // CRC on
-  const int headerBits = 20; // explicit header overhead
-
-  // Total bits to encode: payload + CRC + header overhead
-  // For SF5/SF6 the SX1280 always uses 8-symbol minimum.
-  int numBitPayload = 8 * pl + crcBits + headerBits;
-  double numSymPayload;
-
-  if (sf <= 6) {
-    // No low data rate optimisation; ceil division
-    numSymPayload =
-        8.0 +
-        (double)((numBitPayload > 4 * sf)
-                     ? ((numBitPayload - 4 * sf + 4 * (cr_denom)-5) /
-                        (4 * (cr_denom - 4) > 0 ? 4 * (cr_denom - 4) : 1)) *
-                               (cr_denom) +
-                           8
-                     : 8);
-  } else {
-    // Standard formula for SF7–SF12
-    double val = (double)(8 * pl - 4 * sf + 8 + crcBits + headerBits);
-    if (val < 0)
-      val = 0;
-    double symbolsPayload = 8.0 + ceil(val / (4.0 * sf)) * cr_denom;
-    numSymPayload = symbolsPayload;
+  if (irqStatus & IRQ_HEADER_VALID) {
+    irqStatusSeen |= IRQ_HEADER_VALID;
+    headerValid = true;
   }
 
-  const double t_payload = numSymPayload * t_sym;
-  const double t_total = t_preamble + t_payload;
-
-  // Convert seconds → nanoseconds.
-  return static_cast<int64_t>(t_total * 1e9);
-}
-
-// ---------------------------------------------------------------------------
-// Private: Apply parameter changes
-// ---------------------------------------------------------------------------
-
-void Datalink_SX1280_V2::applyParamChanges() {
-  if (modParamsChanged_) {
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] Applying mod params\n", moduleId_);
-#endif
-    lora_.setModulationParams(spreadingFactor_, bandwidth_, codingRate_);
-    lora_.setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
-                          LORA_IQ_NORMAL, 0, 0);
-    modParamsChanged_ = false;
+  if (irqStatus & IRQ_HEADER_ERROR) {
+    irqStatusSeen |= IRQ_HEADER_ERROR;
+    headerError = true;
   }
-  if (freqChanged_) {
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] Applying freq %lu\n", moduleId_,
-                  (unsigned long)freq_hz_);
-#endif
-    lora_.setRfFrequency(freq_hz_, 0);
-    freqChanged_ = false;
+
+  if (irqStatus & IRQ_CRC_ERROR) {
+    irqStatusSeen |= IRQ_CRC_ERROR;
+    crcError = true;
+  }
+
+  if (irqStatus & IRQ_RX_DONE) {
+    irqStatusSeen |= IRQ_RX_DONE;
+    rxDone = true;
+    rxDoneTimestamp = irqTrigTimestamp;
+  }
+
+  if (irqStatus & IRQ_TX_DONE) {
+    irqStatusSeen |= IRQ_TX_DONE;
+    txDone = true;
+    txDoneTimestamp = irqTrigTimestamp;
+  }
+
+  if (irqStatus & IRQ_RX_TX_TIMEOUT) {
+    irqStatusSeen |= IRQ_RX_TX_TIMEOUT;
+    rxTxTimeout = true;
+  }
+
+  irqStatusRemain |= irqStatus & ~irqStatusSeen;
+
+  irqTrigTimestamp = 0;
+
+  if (irqStatus) {
+    lora.clearIrqStatus(irqStatus);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Private: Enter continuous RX
-// ---------------------------------------------------------------------------
-
-void Datalink_SX1280_V2::enterRx() {
-#ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] enterRx() from state %d, accum 0x%04X\n",
-                moduleId_, (int)state_, irqAccum_);
-#endif
-
-  // Reset the software accumulator — we are starting a fresh RX cycle.
-  irqAccum_ = 0;
-  preambleActive_ = false;
-
-  // Go to STDBY so we can safely reconfigure.
-  lora_.setMode(MODE_STDBY_RC);
-
-  // Apply any pending modulation / frequency changes.
-  applyParamChanges();
-
-  // Configure buffer pointers.
-  lora_.setBufferBaseAddress(0, 0);
-
-  // Route the IRQs we care about to DIO1.
-  lora_.setDioIrqParams(IRQ_RADIO_ALL,
-                        (IRQ_RX_DONE | IRQ_RX_TX_TIMEOUT |
-                         IRQ_PREAMBLE_DETECTED | IRQ_HEADER_VALID |
-                         IRQ_HEADER_ERROR | IRQ_CRC_ERROR),
-                        0, 0);
-
-  // Enter continuous RX (timeout = 0xFFFF means no timeout on the SX1280).
-  lora_.setRx(0xFFFF);
-
-  state_ = State::Receiving;
-
-#ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] Entered RX\n", moduleId_);
-#endif
+bool Datalink_SX1280_V2::isActivelyReceiving() const {
+  return state == State::Receiving || receiveFlagTrig();
 }
 
-// ---------------------------------------------------------------------------
-// Private: Read completed packet
-// ---------------------------------------------------------------------------
-
-void Datalink_SX1280_V2::handleReceivedPacket() {
-  size_t packetLen = lora_.readRXPacketL();
-  if (packetLen == 0) {
-#ifdef SX1280_DEBUG
-    Serial.printf("[SX1280 %d] RX packet length 0 — ignoring\n", moduleId_);
-#endif
-    return;
-  }
-
-  receivedDataRSSI_ = lora_.readPacketRSSI();
-  receivedDataSNR_ = lora_.readPacketSNR();
-
-  // Use the preamble detection timestamp directly as the packet timestamp.
-  // This was captured by the DIO1 ISR at the moment the preamble was detected
-  // and is far more accurate than back-calculating from RX_DONE minus airtime.
-  // The preamble timestamp has a fixed, deterministic offset from the true TX
-  // start time, which the PLL absorbs as a constant phase bias.
-  //
-  // Fall back to RX_DONE minus airtime only if we somehow missed the preamble
-  // IRQ (receiveStartTimestamp_ == 0).
-  if (receiveStartTimestamp_ == 0) {
-    int64_t airTime = lora_.getLoRaTimeOnAirMs(packetLen) * Core::MILLISECONDS;
-    int64_t rxDoneTime =
-        recvFinishTimestamp_ == 0 ? threadStartTime_ : recvFinishTimestamp_;
-    receiveStartTimestamp_ = rxDoneTime - airTime;
-  }
-
-#ifdef SX1280_DEBUG
-  int64_t airTimeMeas = recvFinishTimestamp_ - receiveStartTimestamp_;
-  Serial.printf("[SX1280 %d] Packet length: %d bytes, preamble-to-done: "
-                "%.3f ms\n",
-                moduleId_, (int)packetLen,
-                (double)airTimeMeas / Core::MILLISECONDS);
-#endif
-
-  DataPacket pkt;
-  pkt.timestamp = receiveStartTimestamp_;
-  pkt.payload.setSize(packetLen);
-
-  lora_.startReadSXBuffer(0);
-  lora_.readBuffer(pkt.payload.getPtr(), packetLen);
-  lora_.endReadSXBuffer();
-
-#ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] Dispatching %d-byte packet (RSSI %d, SNR %d)\n",
-                moduleId_, (int)packetLen, (int)receivedDataRSSI_,
-                (int)receivedDataSNR_);
-#endif
-
-  receiveHandlers_.callHandlers(pkt);
+bool Datalink_SX1280_V2::receiveFlagTrig() const {
+  return rxDone /* || preambleDetected*/ || crcError || headerValid ||
+         headerError;
 }
 
-// ---------------------------------------------------------------------------
-// Private: Start TX
-// ---------------------------------------------------------------------------
+bool Datalink_SX1280_V2::isTxReady() const {
+  return sxTxPendingSize > 0 && Core::NOW() > txScheduledTime;
+}
 
-void Datalink_SX1280_V2::startTransmit() {
-  if (txPendingSize_ == 0)
-    return;
+void Datalink_SX1280_V2::clearReceiveFlags() {
+  headerValid = false;
+  headerError = false;
+  crcError = false;
+  rxDone = false;
+  preambleDetected = false;
+  rxTxTimeout = false;
+}
 
-  // Reset the software accumulator — we are starting a fresh TX cycle.
-  irqAccum_ = 0;
+void Datalink_SX1280_V2::clearAllIrqFlags() {
+  clearReceiveFlags();
+  txDone = false;
+  rxTxTimeout = false;
+}
 
-#ifdef SX1280_DEBUG
-  Serial.printf("[SX1280 %d] Starting TX (%d bytes)\n", moduleId_,
-                (int)txPendingSize_);
-#endif
+void Datalink_SX1280_V2::applyLoraParams() {
+  lora.setMode(MODE_STDBY_XOSC);
+  lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
+  modParamsChanged = false;
+  state = State::Idle;
+}
 
-  // Go to STDBY so we can reconfigure for TX.
-  lora_.setMode(MODE_STDBY_RC);
+void Datalink_SX1280_V2::applyFreqChange() {
+  lora.setMode(MODE_STDBY_XOSC);
+  lora.setRfFrequency(freq_hz, 0);
+  freqChanged = false;
+  state = State::Idle;
+  // Serial.printf("[SX1280 %d] Frequency set to %lu Hz\n", moduleId, freq_hz);
+}
 
-  // Apply any pending param changes before transmitting.
-  applyParamChanges();
+void Datalink_SX1280_V2::prepareTx(const uint8_t *data, size_t size,
+                                   int64_t txStart) {
+  txScheduledTime = txStart == 0 ? Core::NOW() : txStart;
+  sxTxPendingSize = size;
+
+  // Clear stale receive flags before putting the radio in STDBY.
+  // startWriteSXBuffer calls setMode(MODE_STDBY_RC) which aborts any ongoing
+  // RX. Without clearing these flags, the state machine would incorrectly
+  // re-enter Receiving state and block the pending TX.
+  clearReceiveFlags();
+  state = State::Idle;
+
+  lora.startWriteSXBuffer(128);
+  lora.writeBufferRaw(data, sxTxPendingSize);
+  lora.endWriteSXBuffer();
+  lora.setPayloadLength(static_cast<uint8_t>(sxTxPendingSize));
 
   // Compute effective power.
-  int8_t power = txPower_ - (int8_t)paDbm_;
-  if (power > maxTxPower_)
-    power = maxTxPower_;
+  int8_t power = txPower;
+  if (power > maxTxPower)
+    power = maxTxPower;
+  power = power - (int8_t)paGain;
 
-  // Place the payload into the SX1280's internal buffer.
-  lora_.startWriteSXBuffer(0);
-  lora_.writeBufferRaw(txBuffer_, txPendingSize_);
-  lora_.endWriteSXBuffer();
+  if (lastTxPower != power) {
+    lora.setTxParams(power, RAMP_TIME);
+    lastTxPower = power;
+  }
 
-  // Configure buffer and payload length.
-  lora_.setBufferBaseAddress(0, 0);
-  lora_.setPayloadLength(static_cast<uint8_t>(txPendingSize_));
-  lora_.setTxParams(power, RAMP_TIME);
+  txPendingSize = 0;
 
-  // Route TX-related IRQs to DIO1.
-  lora_.setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_RX_TX_TIMEOUT), 0, 0);
+  // Serial.printf("%.4f, Tx Prepared\n", Core::NOWSeconds());
+}
 
-  // Start TX (no timeout — we have a software timeout).
-  lora_.setTx(0);
+void Datalink_SX1280_V2::startTx() {
+  txScheduledTime = 0;
+  txStartTimestamp = Core::NOW();
+  // lora.setBufferBaseAddress(128, 0);
+  lora.setTx(0);
+  state = State::Transmitting;
+  // auto end = Core::NOW();
+  // Serial.printf("%.1f, Tx Started. dT: %.1f, since last: %.1f\n",
+  //               (double)txStartTimestamp / Core::MILLISECONDS,
+  //               (double)(end - txStartTimestamp) / Core::MILLISECONDS,
+  //               (double)(txStartTimestamp - lastTxPrint) /
+  //               Core::MILLISECONDS);
+  // lastTxPrint = txStartTimestamp;
+}
 
-  transmitStartTime_ = Core::NOW();
-  state_ = State::Transmitting;
-  txPendingSize_ = 0;
+void Datalink_SX1280_V2::startIdleRx() {
+  // lora.setBufferBaseAddress(128, 0);
+  lora.setRx(rxActiveTimeout / Core::MILLISECONDS);
+  state = State::IdleReceive;
+  rxIdleStartTimestamp = Core::NOW();
+}
+
+void Datalink_SX1280_V2::startActiveRx() {
+  // irqStatusRemain |=
+  //     (crcError ? IRQ_CRC_ERROR : 0) | (headerError ? IRQ_HEADER_ERROR : 0) |
+  //     (preambleDetected ? IRQ_PREAMBLE_DETECTED : 0) |
+  //     (headerValid ? IRQ_HEADER_VALID : 0) | (rxDone ? IRQ_RX_DONE : 0);
+  if (rxStartTimestamp == 0) {
+    rxStartTimestamp = Core::NOW();
+  }
+  state = State::Receiving;
+}
+
+void Datalink_SX1280_V2::retrieveRxData() {
+
+  // lora.setMode(MODE_STDBY_XOSC);
+
+  receivedDataRSSI = lora.readPacketRSSI();
+  receivedDataSNR = lora.readPacketSNR();
+
+  auto len = lora.readRXPacketL();
+
+  uint8_t buffer[len];
+  lora.startReadSXBuffer(0);
+  lora.readBuffer(buffer, len);
+  lora.endReadSXBuffer();
+
+  auto tOA = lora.getLoRaTimeOnAirMs(len) * Core::MILLISECONDS;
+  auto packetRecvStartTime = rxDoneTimestamp - tOA;
+  DataPacket packet;
+  packet.timestamp = packetRecvStartTime;
+  packet.payload.setSize(len);
+  memcpy(packet.payload.getPtr(), buffer, len);
+
+  // Serial.printf("[SX1280 %d] Packet received. RxDone: %.1f, ToA: %.1f ms, Est
+  // "
+  //               "start: %.1f, RSSI: %d, SNR: %d, Len: %d\n",
+  //               moduleId, Core::NOWSeconds() * 1000,
+  //               (double)tOA / Core::MILLISECONDS,
+  //               (double)packetRecvStartTime / Core::MILLISECONDS,
+  //               receivedDataRSSI, receivedDataSNR, (int)len);
+
+  receiveHandlers_.callHandlers(packet);
+}
+
+void Datalink_SX1280_V2::updateReceiveState() {
+
+  if (rxDone) {
+    if (!crcError && headerValid && enableTxRx) {
+      retrieveRxData();
+    }
+
+    rxDoneTimestamp = rxStartTimestamp = 0;
+    state = State::Idle;
+    clearReceiveFlags();
+  } else if (Core::NOW() - rxStartTimestamp > rxActiveTimeout) {
+    // Serial.printf("%.4f, Rx Timeout\n", Core::NOWSeconds());
+    rxDoneTimestamp = rxStartTimestamp = 0;
+    state = State::Idle;
+    clearReceiveFlags();
+  } else if (crcError || headerError || rxTxTimeout || !enableTxRx) {
+    rxDoneTimestamp = rxStartTimestamp = 0;
+    state = State::Idle;
+    clearReceiveFlags();
+  }
+
+  // clearReceiveFlags();
+}
+
+void Datalink_SX1280_V2::updateTransmitState() {
+  if (txDone || Core::NOW() - txStartTimestamp > txActiveTimeout) {
+    transmitFinishedHandler.callHandlers();
+    sxTxPendingSize = 0;
+    txStartTimestamp = 0;
+    txDoneTimestamp = 0;
+    state = State::Idle;
+    rxTxTimeout = false;
+    txDone = false;
+  }
+}
+
+void Datalink_SX1280_V2::updateIdleRxState() {
+
+  if (isActivelyReceiving()) {
+    startActiveRx();
+    updateReceiveState();
+  } else if (rxTxTimeout || (rxIdleStartTimestamp > 0 &&
+                             Core::NOW() - rxIdleStartTimestamp >
+                                 rxActiveTimeout + 500 * Core::MILLISECONDS)) {
+    // RX timeout: the hardware has returned to STDBY.
+    // Transition to Idle so the radio re-enters RX on the next tick.
+    rxTxTimeout = false;
+    rxIdleStartTimestamp = 0;
+    state = State::Idle;
+  } else if (freqChanged) {
+    applyFreqChange();
+  } else if (modParamsChanged) {
+    applyLoraParams();
+  } else if (isTxReady()) {
+    startTx();
+  }
+}
+
+void Datalink_SX1280_V2::updateIdleState() {
+
+  if (freqChanged) {
+    applyFreqChange();
+  } else if (modParamsChanged) {
+    applyLoraParams();
+  } else if (isTxReady()) {
+    startTx();
+  } else {
+    startIdleRx();
+  }
 }
 
 } // namespace VCTR::network::datalink

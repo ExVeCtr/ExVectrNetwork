@@ -10,6 +10,7 @@
 */
 
 #include <cmath>
+#include <cstring>
 
 #include "ExVectrCore/print.hpp"
 #include "ExVectrCore/time_definitions.hpp"
@@ -61,7 +62,8 @@ inline bool digitalRead(HAL::PinGPIO &pin) { return pin.getPinValue(); }
 // #define SX128XDEBUGRXTX            //enable debug messages for RX TX
 // switching #define SX128XDEBUGPINS            //enable pin allocation debug
 // messages #define SX128XDEBUGRELIABLE        //enable for debugging reliable
-// and data transfer (DT) packets #define USEPAYLOADLENGTHREGISTER   //enable
+// and data transfer (DT) packets
+#define USEPAYLOADLENGTHREGISTER // enable
 // autoamtic setting of Payload length with register write #define
 // DETECTRELIABLERRORS        //enable to improve error detect reliable errors
 // such as incorrect packet size etc
@@ -171,7 +173,7 @@ void SX128XLT::rxEnable() {
 #ifdef REVISEDCHECKBUSY
 void SX128XLT::checkBusy() {
 #ifdef SX128XDEBUG
-  Serial.println(F("checkBusy() Revised"));
+  LOG_MSG(("checkBusy() Revised"));
 #endif
 
   int64_t startmS = Core::NOW();
@@ -362,7 +364,7 @@ bool SX128XLT::checkDevice() {
 }
 
 void SX128XLT::setupLoRa(uint32_t frequency, int32_t offset, uint8_t modParam1,
-                         uint8_t modParam2, uint8_t modParam3) {
+                         uint8_t modParam2, uint8_t modParam3, bool enableCrc) {
 #ifdef SX128XDEBUG
   Serial.println(F("setupLoRa()"));
 #endif
@@ -373,8 +375,9 @@ void SX128XLT::setupLoRa(uint32_t frequency, int32_t offset, uint8_t modParam1,
   setRfFrequency(frequency, offset);
   setBufferBaseAddress(0, 0);
   setModulationParams(modParam1, modParam2, modParam3);
-  setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
-                  LORA_IQ_NORMAL, 0, 0);
+  setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255,
+                  (enableCrc ? LORA_CRC_ON : LORA_CRC_OFF), LORA_IQ_NORMAL, 0,
+                  0);
   setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE + IRQ_RX_TX_TIMEOUT), 0, 0);
   setHighSensitivity();
 }
@@ -409,6 +412,16 @@ void SX128XLT::setMode(uint8_t modeconfig) {
 #endif
 
   uint8_t Opcode = 0x80;
+
+  // When entering standby, disable both PA (TXEN) and LNA (RXEN) so they
+  // are not left powered while the radio is idle.  setTx() / setRx() will
+  // re-enable the correct pin when the radio starts transmitting or
+  // receiving again.
+  if (_rxtxpinmode &&
+      (modeconfig == MODE_STDBY_RC || modeconfig == MODE_STDBY_XOSC)) {
+    _RXEN.setPinValue(false);
+    _TXEN.setPinValue(false);
+  }
 
   checkBusy();
 
@@ -1532,6 +1545,44 @@ uint8_t SX128XLT::readPacket(uint8_t *rxbuffer, uint8_t size) {
 // buffer
 //***********************************************************************************
 
+void SX128XLT::directWriteSXBuffer(uint8_t address, const uint8_t *data,
+                                   uint8_t len) {
+#ifdef SX128XDEBUG
+  Serial.println(F("directWriteSXBuffer()"));
+#endif
+
+  uint8_t buf[len + 3];
+  buf[0] = RADIO_WRITE_BUFFER;
+  buf[1] = address;
+  memcpy((void *)&buf[2], data, len);
+
+  checkBusy();
+
+  _spiBus.setInputParam(HAL::IO_PARAM_t::SPEED, LTspeedMaximum);
+  _spiBus.setInputParam(HAL::IO_PARAM_t::SPI_MODE, 0);
+  _spiBus.setInputParam(HAL::IO_PARAM_t::MSB_FIRST, true);
+
+  _spiBus.writeData(buf, len + 2, true);
+}
+
+void SX128XLT::directReadSXBuffer(uint8_t address, uint8_t *data, uint8_t len) {
+#ifdef SX128XDEBUG
+  Serial.println(F("directReadSXBuffer()"));
+#endif
+
+  checkBusy();
+
+  _spiBus.setInputParam(HAL::IO_PARAM_t::SPEED, LTspeedMaximum);
+  _spiBus.setInputParam(HAL::IO_PARAM_t::SPI_MODE, 0);
+  _spiBus.setInputParam(HAL::IO_PARAM_t::MSB_FIRST, true);
+
+  _spiBus.writeByte(RADIO_READ_BUFFER, false);
+  _spiBus.writeByte(address, false); // address in SX buffer to read from
+  _spiBus.writeByte(0xFF, false);
+
+  _spiBus.readData(data, len, true);
+}
+
 void SX128XLT::startWriteSXBuffer(uint8_t ptr) {
 #ifdef SX128XDEBUG
   Serial.println(F("startWriteSXBuffer()"));
@@ -1539,7 +1590,6 @@ void SX128XLT::startWriteSXBuffer(uint8_t ptr) {
 
   _TXPacketL = 0; // this variable used to keep track of bytes written
   setMode(MODE_STDBY_RC);
-  setBufferBaseAddress(ptr, 0); // TX,RX
   checkBusy();
 
   _spiBus.setInputParam(HAL::IO_PARAM_t::SPEED, LTspeedMaximum);
@@ -4861,60 +4911,80 @@ uint8_t SX128XLT::sendACKDTIRQ(uint8_t *header, uint8_t headersize,
 //***************************************************************************
 
 float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
-                                    uint16_t preambleSymbols, bool headerType,
-                                    bool crcOn, uint8_t payloadBytes) {
+                                    uint16_t preambleSymbols,
+                                    bool explicitHeader, bool crcOn,
+                                    uint8_t payloadBytes) {
 
-  // Two formula variants are needed depending on whether a legacy or
-  // Long Interleaving (LI) coding rate is in use.
-  //
-  // Legacy CR: register values 1–4 (coding rates 4/5 … 4/8)
-  //   Matches the Semtech SX1280 DevKit reference (DemoApplication.cpp).
-  //   SX1280 always has de=1, so denominator is 4*(SF-2).
-  //   nPayload = 8 + max(ceil((8*PL - 4*SF + 28 + 16*crc - 20*ih)
-  //                            / (4*(SF-2))) * (CR+4), 0)
-  //
-  // Long Interleaving: register values 5, 6, 7 (rates 4/5LI, 4/6LI, 4/8LI)
-  //   Matched to the Semtech online LoRa calculator output.
-  //   Denominator is 4*SF, base payload overhead is 7, multiplier is the
-  //   LI rate denominator (5, 6, or 8) directly.
-  //   nPayload = 7 + max(ceil((8*PL - 4*SF + 28 + 16*crc - 20*ih)
-  //                            / (4*SF)) * crLI, 0)
-
-  const int32_t ih = headerType ? 0 : 1;
-  const int32_t crc16 = crcOn ? 1 : 0;
+  const int32_t PL = static_cast<int32_t>(payloadBytes);
+  const int32_t SF = static_cast<int32_t>(sf);
+  const int32_t CRC = crcOn ? 16 : 0; // N_bit_CRC
   const bool isLongInterleaving = (cr > 4);
 
-  const int32_t numerator = 8 * static_cast<int32_t>(payloadBytes) -
-                            4 * static_cast<int32_t>(sf) + 28 + 16 * crc16 -
-                            20 * ih;
-
-  float nPayload;
+  float nSymbol = 0.0f;
 
   if (!isLongInterleaving) {
-    // Legacy coding rate (CR 1–4)
-    const int32_t denominator = 4 * (static_cast<int32_t>(sf) - 2);
-    if (numerator > 0) {
-      nPayload = 8.0f + std::ceil(static_cast<float>(numerator) /
-                                  static_cast<float>(denominator)) *
-                            static_cast<float>(cr + 4);
+    // =================================================================
+    // Section 7.4.4.1 — Legacy coding rate (CR 1–4)
+    // =================================================================
+    const int32_t hdr = explicitHeader ? 20 : 0; // N_symbol_header
+
+    if (SF < 7) {
+      // SF5, SF6:
+      //   N = preamble + 6.25 + 8
+      //       + ceil(max(8*PL + CRC - 4*SF + hdr, 0) / (4*SF)) * (CR+4)
+      const int32_t num = 8 * PL + CRC - 4 * SF + hdr;
+      const int32_t den = 4 * SF;
+      const float payPart =
+          (num > 0)
+              ? std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+                    static_cast<float>(cr + 4)
+              : 0.0f;
+      nSymbol = static_cast<float>(preambleSymbols) + 6.25f + 8.0f + payPart;
+
+    } else if (SF <= 10) {
+      // SF7–SF10:
+      //   N = preamble + 4.25 + 8
+      //       + ceil(max(8*PL + CRC - 4*SF + 8 + hdr, 0) / (4*SF)) * (CR+4)
+      const int32_t num = 8 * PL + CRC - 4 * SF + 8 + hdr;
+      const int32_t den = 4 * SF;
+      const float payPart =
+          (num > 0)
+              ? std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+                    static_cast<float>(cr + 4)
+              : 0.0f;
+      nSymbol = static_cast<float>(preambleSymbols) + 4.25f + 8.0f + payPart;
+
     } else {
-      nPayload = 8.0f;
+      // SF11, SF12:
+      //   N = preamble + 4.25 + 8
+      //       + ceil(max(8*PL + CRC - 4*SF + 8 + hdr, 0) / (4*(SF-2))) * (CR+4)
+      const int32_t num = 8 * PL + CRC - 4 * SF + 8 + hdr;
+      const int32_t den = 4 * (SF - 2);
+      const float payPart =
+          (num > 0)
+              ? std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+                    static_cast<float>(cr + 4)
+              : 0.0f;
+      nSymbol = static_cast<float>(preambleSymbols) + 4.25f + 8.0f + payPart;
     }
+
   } else {
-    // Long Interleaving coding rate
-    // Map register value to the actual LI rate denominator:
-    //   0x05 -> 5 (4/5 LI)
-    //   0x06 -> 6 (4/6 LI)
-    //   0x07 -> 8 (4/8 LI)
+    // =================================================================
+    // Section 7.4.4.2 — Long Interleaving (CR register value 5, 6, or 7)
+    // =================================================================
+    // Map register value to the actual LI CR multiplier:
+    //   0x05 → 5 (4/5 LI)
+    //   0x06 → 6 (4/6 LI)
+    //   0x07 → 8 (4/8 LI)
     int32_t crLI;
     switch (cr) {
-    case 0x05:
+    case 5:
       crLI = 5;
       break;
-    case 0x06:
+    case 6:
       crLI = 6;
       break;
-    case 0x07:
+    case 7:
       crLI = 8;
       break;
     default:
@@ -4922,32 +4992,159 @@ float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
       break; // fallback
     }
 
-    const int32_t denominator = 4 * static_cast<int32_t>(sf);
-    if (numerator > 0) {
-      nPayload = 7.0f + std::ceil(static_cast<float>(numerator) /
-                                  static_cast<float>(denominator)) *
-                            static_cast<float>(crLI);
+    const int32_t bitPayload = 8 * PL + CRC;
+
+    if (explicitHeader) {
+      // --- With Header (explicit/variable) ---
+      // Each SF range computes N_bit_header_space, then branches on
+      // whether bitPayload > N_bit_header_space.
+
+      if (SF < 7) {
+        const int32_t hdrSpace = (SF - 5) / 2 * 8; // floor((SF-5)/2) * 8
+        const float preambleOH = 6.25f;
+        const int32_t den = 4 * SF;
+
+        if (bitPayload > hdrSpace) {
+          const int32_t minTerm = std::min(hdrSpace, 8 * PL);
+          const int32_t num = std::max(int32_t{0}, bitPayload - minTerm);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        } else {
+          const int32_t num = std::max(int32_t{0}, bitPayload - hdrSpace);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        }
+
+      } else if (SF <= 10) {
+        const int32_t hdrSpace = (SF - 7) / 2 * 8; // floor((SF-7)/2) * 8
+        const float preambleOH = 4.25f;
+        const int32_t den = 4 * SF;
+
+        if (bitPayload > hdrSpace) {
+          const int32_t minTerm = std::min(hdrSpace, 8 * PL);
+          const int32_t num = std::max(int32_t{0}, bitPayload - minTerm);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        } else {
+          const int32_t num = std::max(int32_t{0}, bitPayload - hdrSpace);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        }
+
+      } else {
+        // SF > 10 (SF11, SF12)
+        const int32_t hdrSpace = (SF - 7) / 2 * 8;
+        const float preambleOH = 4.25f;
+        const int32_t den = 4 * (SF - 2);
+
+        if (bitPayload > hdrSpace) {
+          const int32_t minTerm = std::min(hdrSpace, 8 * PL);
+          const int32_t num = std::max(int32_t{0}, bitPayload - minTerm);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        } else {
+          const int32_t num = std::max(int32_t{0}, bitPayload - hdrSpace);
+          const float payPart =
+              std::ceil(static_cast<float>(num) / static_cast<float>(den)) *
+              static_cast<float>(crLI);
+          nSymbol =
+              static_cast<float>(preambleSymbols) + preambleOH + 8.0f + payPart;
+        }
+      }
+
     } else {
-      nPayload = 7.0f;
+      // --- Without Header (implicit/fixed) ---
+      // Page 49 of the datasheet.
+      //
+      // Each SF range computes N_symbol_beginning first, then branches
+      // on whether it is < 8.
+      //
+      // NOTE: The SF7–SF10 "Else" branch has a unique formula:
+      //   N = preamble + 4.25 + 8 + ceil( ((8*PL+CRC)*CR + 64) / (4*SF) - 8 )
+      // using 4*SF (not 4*(SF-2)) in the denominator and adding 64.
+
+      if (SF < 7) {
+        const int32_t den = 4 * SF;
+        const float nSymBeginning =
+            std::ceil(static_cast<float>(bitPayload) / static_cast<float>(den) *
+                      static_cast<float>(crLI));
+
+        if (nSymBeginning < 8.0f) {
+          nSymbol = static_cast<float>(preambleSymbols) + 6.25f + nSymBeginning;
+        } else {
+          nSymbol =
+              static_cast<float>(preambleSymbols) + 6.25f + 8.0f +
+              std::ceil(static_cast<float>(bitPayload) /
+                            static_cast<float>(den) * static_cast<float>(crLI) -
+                        8.0f);
+        }
+
+      } else if (SF <= 10) {
+        const int32_t denBegin = 4 * (SF - 2);
+        const float nSymBeginning =
+            std::ceil(static_cast<float>(bitPayload) /
+                      static_cast<float>(denBegin) * static_cast<float>(crLI));
+
+        if (nSymBeginning < 8.0f) {
+          nSymbol = static_cast<float>(preambleSymbols) + 4.25f + nSymBeginning;
+        } else {
+          nSymbol = static_cast<float>(preambleSymbols) + 4.25f + 8.0f +
+                    std::ceil((static_cast<float>(bitPayload) *
+                                   static_cast<float>(crLI) +
+                               64.0f) /
+                                  static_cast<float>(4 * SF) -
+                              8.0f);
+        }
+
+      } else {
+        // SF > 10
+        const int32_t den = 4 * (SF - 2);
+        const float nSymBeginning =
+            std::ceil(static_cast<float>(bitPayload) / static_cast<float>(den) *
+                      static_cast<float>(crLI));
+
+        if (nSymBeginning < 8.0f) {
+          nSymbol = static_cast<float>(preambleSymbols) + 4.25f + nSymBeginning;
+        } else {
+          nSymbol =
+              static_cast<float>(preambleSymbols) + 4.25f + 8.0f +
+              std::ceil(static_cast<float>(bitPayload) /
+                            static_cast<float>(den) * static_cast<float>(crLI) -
+                        8.0f);
+        }
+      }
     }
   }
 
-  const float preambleTotal = static_cast<float>(preambleSymbols) + 4.25f;
-
-  return preambleTotal + nPayload;
+  return nSymbol - 1;
 }
 
 float SX128XLT::calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz,
                                     uint8_t cr, uint16_t preambleSymbols,
-                                    bool headerType, bool crcOn,
+                                    bool explicitHeader, bool crcOn,
                                     uint8_t payloadBytes) {
 
-  const float nSymbol = calcLoRaSymbolCount(sf, cr, preambleSymbols, headerType,
-                                            crcOn, payloadBytes);
+  const float nSymbol = calcLoRaSymbolCount(
+      sf, cr, preambleSymbols, explicitHeader, crcOn, payloadBytes);
 
   // ToA = (2^SF / BW) * N_symbol
-  // With BW in Hz and the desired result in ms:
-  //   ToA_ms = (2^SF / BW_Hz) * N_symbol * 1000
+  // Datasheet defines BW in kHz, result in ms.
+  // With BW in Hz: ToA_ms = (2^SF / BW_Hz) * N_symbol * 1000
   const float symbolDurationMs =
       (static_cast<float>(1UL << sf) / static_cast<float>(bandwidthHz)) *
       1000.0f;
@@ -4977,8 +5174,7 @@ float SX128XLT::getLoRaTimeOnAirMs(uint8_t payloadBytes) {
   const bool explicitHeader = (savedPacketParam2 == 0);
   const bool crcOn = (savedPacketParam4 != 0);
 
-  return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, explicitHeader, crcOn,
-                             payloadBytes);
+  return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, true, crcOn, payloadBytes);
 }
 
 void SX128XLT::snapshotLoRaParams() {
