@@ -72,9 +72,12 @@ public:
   size_t getNumChannels() const override;
   size_t getCurrentChannel() const override;
   void setChannel(size_t channel) override;
+  void setStartReceive(bool rxEnabled) override;
+  void setEnableTxRx(bool enable) override;
+  void setEnableAutoRx(bool enableAutoRx) override;
 
   // --- Configuration ---------------------------------------------------------
-  void setFrequency(uint32_t freq_hz);
+  void setFrequency(uint32_t newFreqHz);
   void setSpreadingFactor(SX1280_SF sf);
   void setBandwidth(SX1280_BW bw);
   void setCodingRate(SX1280_CR cr);
@@ -88,11 +91,6 @@ public:
   void clearRemainIrqFlags() { irqStatusRemain = 0; }
 
   SX128XLT &getRadio() { return lora; }
-  /**
-   * @brief Enable or disable all radio activity.
-   * When disabled the radio is placed in STDBY.
-   */
-  void setEnableTxRx(bool enable);
 
   void addTransmitFinishedHandler(std::function<void()> handler);
 
@@ -109,7 +107,7 @@ private:
   // --- Constants -------------------------------------------------------------
   static constexpr size_t kMaxFrameLength = 128;
 
-  static constexpr uint8_t kNumChannels = 16;
+  static constexpr uint8_t kNumChannels = 20;
   static constexpr uint32_t kMinFreq = 2425000000UL;
   static constexpr uint32_t kMaxFreq = 2475000000UL;
   static constexpr uint32_t kChannelSpacing =
@@ -125,8 +123,10 @@ private:
 
   // --- State -----------------------------------------------------------------
   State state = State::Sleep;
-  bool enableTxRx = false;
-  bool isEnableTxRx = false;
+  bool txRxEnabled = false;   // Allow rx and tx to occur
+  bool autoRxEnabled = true;  // Auto apply mod param changes and re enter rx.
+  bool rxStartedFlag = false; // Trigger mod params to apply and then enter rx.
+  bool leaveRxFlag = false;   // Stop idle receive if true
 
   // --- IRQ Flags--------------------------------------------
   int64_t irqTrigTimestamp = 0;
@@ -146,8 +146,8 @@ private:
   int64_t rxIdleStartTimestamp = 0;
 
   // --- Timeouts ------------------------------------------------
-  int64_t rxActiveTimeout = 2000 * Core::MILLISECONDS;
-  int64_t txActiveTimeout = 7000 * Core::MILLISECONDS;
+  int64_t rxActiveTimeout = 20 * Core::MILLISECONDS;
+  int64_t txActiveTimeout = 5000 * Core::MILLISECONDS;
 
   // --- TX pending data ----------------------------------
   uint8_t txBuffer[kMaxFrameLength];
@@ -198,6 +198,8 @@ private:
 
   void applyFreqChange();
 
+  void updateModParams();
+
   /**
    * Prepares the radio for transmission by placing data onto module and setting
    * parameters. Call startTx() to actually start transmission after this. Use
@@ -220,6 +222,11 @@ private:
    * Puts the radio into active receiving mode
    */
   void startActiveRx();
+
+  /**
+   * Puts the radio into idle mode.
+   */
+  void startIdle();
 
   /**
    * Gets the data received from the radio and calls handlers.

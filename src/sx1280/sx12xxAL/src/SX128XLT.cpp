@@ -1589,7 +1589,7 @@ void SX128XLT::startWriteSXBuffer(uint8_t ptr) {
 #endif
 
   _TXPacketL = 0; // this variable used to keep track of bytes written
-  setMode(MODE_STDBY_RC);
+  setMode(MODE_STDBY_XOSC);
   checkBusy();
 
   _spiBus.setInputParam(HAL::IO_PARAM_t::SPEED, LTspeedMaximum);

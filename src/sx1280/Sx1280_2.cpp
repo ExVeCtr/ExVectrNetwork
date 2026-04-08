@@ -40,15 +40,14 @@ Datalink_SX1280_V2::Datalink_SX1280_V2(SX128XLT &sx1280Driver)
 size_t Datalink_SX1280_V2::getMaxPacketSize() const { return kMaxFrameLength; }
 
 bool Datalink_SX1280_V2::isChannelBlocked() const {
-  bool blocked = txScheduledTime != 0 || txPendingSize > 0 || !enableTxRx;
+  bool blocked = !txRxEnabled || txScheduledTime != 0 || txPendingSize > 0;
 
   if (blocked) {
-    // Serial.printf("[SX1280 %d] %.3f Channel is blocked by %s%s%s\n",
+    // Serial.printf("[SX1280 %d] %.3f Channel is blocked by %s%s\n",
     // moduleId,
     //               (double)Core::NOW() / Core::SECONDS,
     //               txScheduledTime != 0 ? "scheduled TX " : "",
-    //               txPendingSize > 0 ? "pending TX " : "",
-    //               !enableTxRx ? "TX disabled" : "");
+    //               txPendingSize > 0 ? "pending TX " : "");
   }
   return blocked;
 }
@@ -88,19 +87,23 @@ size_t Datalink_SX1280_V2::getCurrentChannel() const { return currentChannel; }
 
 void Datalink_SX1280_V2::setChannel(size_t channel) {
   channel = channel % kNumChannels;
+  uint32_t newFreq = kMinFreq + channel * kChannelSpacing;
   currentChannel = channel;
-  freq_hz = kMinFreq + channel * kChannelSpacing;
-
-  freqChanged = true;
+  if (newFreq != freq_hz) {
+    freq_hz = newFreq;
+    freqChanged = true;
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Configuration setters
 // ---------------------------------------------------------------------------
 
-void Datalink_SX1280_V2::setFrequency(uint32_t freq_hz) {
-  freqChanged = true;
-  freq_hz = freq_hz;
+void Datalink_SX1280_V2::setFrequency(uint32_t newFreqHz) {
+  if (newFreqHz != freq_hz) {
+    freq_hz = newFreqHz;
+    freqChanged = true;
+  }
 }
 
 void Datalink_SX1280_V2::setSpreadingFactor(SX1280_SF sf) {
@@ -126,7 +129,16 @@ void Datalink_SX1280_V2::setTxMaxPower(int8_t maxTxPower) {
 
 void Datalink_SX1280_V2::setPAdbm(uint8_t paDbm) { paGain = paDbm; }
 
-void Datalink_SX1280_V2::setEnableTxRx(bool enable) { enableTxRx = enable; }
+void Datalink_SX1280_V2::setStartReceive(bool enable) {
+  rxStartedFlag = enable;
+  leaveRxFlag = !enable;
+}
+
+void Datalink_SX1280_V2::setEnableTxRx(bool enable) { txRxEnabled = enable; }
+
+void Datalink_SX1280_V2::setEnableAutoRx(bool enable) {
+  autoRxEnabled = enable;
+}
 
 void Datalink_SX1280_V2::addTransmitFinishedHandler(
     std::function<void()> handler) {
@@ -165,28 +177,30 @@ void Datalink_SX1280_V2::taskInit() {
   modParamsChanged = false;
   freqChanged = false;
 
-  state = State::Idle;
+  startIdle();
 }
 
 void Datalink_SX1280_V2::taskCheck() {
 
   bool paramsUpdate = (modParamsChanged || freqChanged) &&
-                      (state == State::Idle || state == State::IdleReceive);
+                      (state == State::Idle || state == State::IdleReceive) &&
+                      autoRxEnabled;
   bool irqTrig = irqTrigTimestamp != 0;
   bool rxReady = receiveFlagTrig();
   bool txReady =
       isTxReady() && (state == State::Idle || state == State::IdleReceive);
   bool txPrepare =
       txPendingSize > 0 && sxTxPendingSize == 0 && (state != State::Receiving);
-  // Only leave idle if there's no pending TX waiting for its scheduled time.
+  bool startRx = rxStartedFlag && state == State::Idle;
+  bool stopIdleRx = leaveRxFlag && state == State::IdleReceive;
   bool txWaiting = sxTxPendingSize > 0 && !isTxReady();
-  bool leaveIdle = state == State::Idle && !txWaiting;
 
-  if (paramsUpdate || irqTrig || rxReady || txReady || txPrepare || leaveIdle ||
-      txDone) {
+  if (paramsUpdate || irqTrig || rxReady || txReady || txPrepare || startRx ||
+      stopIdleRx || txDone) {
     setDeadline(Core::NOW());
   } else if (txWaiting) {
-    // Wake up at the TX scheduled time rather than busy-looping.
+    // Wake at the exact scheduled TX time instead of relying on the
+    // periodic tick (100 ms) or an unrelated event.
     setDeadline(txScheduledTime);
   }
 }
@@ -231,8 +245,15 @@ void Datalink_SX1280_V2::taskThread() {
     prepareTx(txBuffer, txPendingSize, txScheduledTime);
   }
 
+  // Start TX immediately if data is prepared and the scheduled time has
+  // arrived — avoids waiting an entire scheduler tick.
+  if (isTxReady() && (state == State::Idle || state == State::IdleReceive)) {
+    startTx();
+  }
+
   irqTrigTimestamp = 0; // reset for next DIO1 event
   // clearAllIrqFlags();
+  rxStartedFlag = false;
 }
 
 void Datalink_SX1280_V2::fetchIrqFlags() {
@@ -337,17 +358,25 @@ void Datalink_SX1280_V2::applyFreqChange() {
   // Serial.printf("[SX1280 %d] Frequency set to %lu Hz\n", moduleId, freq_hz);
 }
 
+void Datalink_SX1280_V2::updateModParams() {
+  if (modParamsChanged || freqChanged) {
+    lora.setMode(MODE_STDBY_XOSC);
+    if (modParamsChanged) {
+      lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
+      modParamsChanged = false;
+    }
+    if (freqChanged) {
+      lora.setRfFrequency(freq_hz, 0);
+      freqChanged = false;
+    }
+    state = State::Idle;
+  }
+}
+
 void Datalink_SX1280_V2::prepareTx(const uint8_t *data, size_t size,
                                    int64_t txStart) {
   txScheduledTime = txStart == 0 ? Core::NOW() : txStart;
   sxTxPendingSize = size;
-
-  // Clear stale receive flags before putting the radio in STDBY.
-  // startWriteSXBuffer calls setMode(MODE_STDBY_RC) which aborts any ongoing
-  // RX. Without clearing these flags, the state machine would incorrectly
-  // re-enter Receiving state and block the pending TX.
-  clearReceiveFlags();
-  state = State::Idle;
 
   lora.startWriteSXBuffer(128);
   lora.writeBufferRaw(data, sxTxPendingSize);
@@ -376,12 +405,13 @@ void Datalink_SX1280_V2::startTx() {
   // lora.setBufferBaseAddress(128, 0);
   lora.setTx(0);
   state = State::Transmitting;
-  // auto end = Core::NOW();
-  // Serial.printf("%.1f, Tx Started. dT: %.1f, since last: %.1f\n",
-  //               (double)txStartTimestamp / Core::MILLISECONDS,
-  //               (double)(end - txStartTimestamp) / Core::MILLISECONDS,
+
+  // Serial.printf("[SX1280 %d] Time since last tx: %.3fs, Tx started at %.3fs,"
+  //               "Payload size: %d\n",
+  //               moduleId,
   //               (double)(txStartTimestamp - lastTxPrint) /
-  //               Core::MILLISECONDS);
+  //               Core::MILLISECONDS, (double)txStartTimestamp / Core::SECONDS,
+  //               sxTxPendingSize);
   // lastTxPrint = txStartTimestamp;
 }
 
@@ -390,6 +420,8 @@ void Datalink_SX1280_V2::startIdleRx() {
   lora.setRx(rxActiveTimeout / Core::MILLISECONDS);
   state = State::IdleReceive;
   rxIdleStartTimestamp = Core::NOW();
+  rxStartedFlag = false;
+  leaveRxFlag = false;
 }
 
 void Datalink_SX1280_V2::startActiveRx() {
@@ -403,9 +435,12 @@ void Datalink_SX1280_V2::startActiveRx() {
   state = State::Receiving;
 }
 
-void Datalink_SX1280_V2::retrieveRxData() {
+void Datalink_SX1280_V2::startIdle() {
+  lora.setMode(MODE_STDBY_XOSC);
+  state = State::Idle;
+}
 
-  // lora.setMode(MODE_STDBY_XOSC);
+void Datalink_SX1280_V2::retrieveRxData() {
 
   receivedDataRSSI = lora.readPacketRSSI();
   receivedDataSNR = lora.readPacketSNR();
@@ -438,36 +473,54 @@ void Datalink_SX1280_V2::retrieveRxData() {
 void Datalink_SX1280_V2::updateReceiveState() {
 
   if (rxDone) {
-    if (!crcError && headerValid && enableTxRx) {
+    if (!crcError && headerValid && txRxEnabled && !leaveRxFlag) {
       retrieveRxData();
     }
-
     rxDoneTimestamp = rxStartTimestamp = 0;
     state = State::Idle;
     clearReceiveFlags();
-  } else if (Core::NOW() - rxStartTimestamp > rxActiveTimeout) {
-    // Serial.printf("%.4f, Rx Timeout\n", Core::NOWSeconds());
+  } else if (crcError || headerError || rxTxTimeout ||
+             Core::NOW() - rxStartTimestamp > rxActiveTimeout || leaveRxFlag) {
     rxDoneTimestamp = rxStartTimestamp = 0;
-    state = State::Idle;
-    clearReceiveFlags();
-  } else if (crcError || headerError || rxTxTimeout || !enableTxRx) {
-    rxDoneTimestamp = rxStartTimestamp = 0;
-    state = State::Idle;
+    startIdle();
     clearReceiveFlags();
   }
 
-  // clearReceiveFlags();
+  // After leaving RX, prepare+start any pending TX before entering IdleRx
+  // to avoid a wasteful RX→STDBY round-trip.
+  if (state == State::Idle) {
+    if (txPendingSize > 0 && sxTxPendingSize == 0) {
+      prepareTx(txBuffer, txPendingSize, txScheduledTime);
+    }
+    if (isTxReady()) {
+      startTx();
+    } else if (autoRxEnabled) {
+      startIdleRx();
+    }
+  }
 }
 
 void Datalink_SX1280_V2::updateTransmitState() {
-  if (txDone || Core::NOW() - txStartTimestamp > txActiveTimeout) {
+  if (txDone || rxTxTimeout ||
+      Core::NOW() - txStartTimestamp > txActiveTimeout) {
     transmitFinishedHandler.callHandlers();
     sxTxPendingSize = 0;
     txStartTimestamp = 0;
     txDoneTimestamp = 0;
-    state = State::Idle;
     rxTxTimeout = false;
     txDone = false;
+    // Prepare any buffered TX before deciding to enter RX — avoids a
+    // wasteful RX entry that would immediately be aborted by prepareTx.
+    if (txPendingSize > 0) {
+      prepareTx(txBuffer, txPendingSize, txScheduledTime);
+    }
+    if (isTxReady()) {
+      startTx();
+    } else if (autoRxEnabled) {
+      startIdleRx();
+    } else {
+      startIdle();
+    }
   }
 }
 
@@ -476,18 +529,25 @@ void Datalink_SX1280_V2::updateIdleRxState() {
   if (isActivelyReceiving()) {
     startActiveRx();
     updateReceiveState();
-  } else if (rxTxTimeout || (rxIdleStartTimestamp > 0 &&
-                             Core::NOW() - rxIdleStartTimestamp >
-                                 rxActiveTimeout + 500 * Core::MILLISECONDS)) {
-    // RX timeout: the hardware has returned to STDBY.
-    // Transition to Idle so the radio re-enters RX on the next tick.
+  } else if (rxTxTimeout) {
     rxTxTimeout = false;
     rxIdleStartTimestamp = 0;
-    state = State::Idle;
-  } else if (freqChanged) {
-    applyFreqChange();
-  } else if (modParamsChanged) {
-    applyLoraParams();
+    if (isTxReady()) {
+      startTx();
+    } else if (autoRxEnabled) {
+      startIdleRx();
+    } else {
+      startIdle();
+    }
+  } else if ((freqChanged || modParamsChanged) &&
+             (autoRxEnabled || rxStartedFlag)) {
+    updateModParams();
+    if (isTxReady()) {
+      startTx();
+    } else {
+      startIdleRx();
+    }
+    rxStartedFlag = false;
   } else if (isTxReady()) {
     startTx();
   }
@@ -495,14 +555,12 @@ void Datalink_SX1280_V2::updateIdleRxState() {
 
 void Datalink_SX1280_V2::updateIdleState() {
 
-  if (freqChanged) {
-    applyFreqChange();
-  } else if (modParamsChanged) {
-    applyLoraParams();
-  } else if (isTxReady()) {
+  updateModParams();
+  if (isTxReady()) {
     startTx();
-  } else {
+  } else if (autoRxEnabled || rxStartedFlag) {
     startIdleRx();
+    rxStartedFlag = false;
   }
 }
 
