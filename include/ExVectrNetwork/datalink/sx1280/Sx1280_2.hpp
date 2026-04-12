@@ -45,6 +45,19 @@ enum SX1280_CR : uint8_t {
 };
 
 /**
+ * @brief Packet framing mode for the SX1280 driver.
+ *
+ * Dynamic:  Explicit LoRa header – variable length on-air.  Default.
+ * Limited:  Implicit LoRa header – fixed OTA size.  A 1-byte length prefix
+ *           is prepended so the receiver knows the actual payload length.
+ *           OTA size = fixedPacketLength + 1.  User payload capacity =
+ *           fixedPacketLength.
+ * Fixed:    Implicit LoRa header – fixed OTA size, no length prefix.
+ *           User payload must always be exactly fixedPacketLength bytes.
+ */
+enum class SX1280_PacketMode : uint8_t { Dynamic, Limited, Fixed };
+
+/**
  * @brief Datalink layer for the SX1280 LoRa transceiver.
  *
  * Design:
@@ -57,7 +70,7 @@ enum SX1280_CR : uint8_t {
  *  - Frequency / modulation parameter changes are applied by restarting RX.
  */
 class Datalink_SX1280_V2 : public VCTR::network::datalink::RadioI,
-                           public VCTR::Core::Task_Periodic {
+                           public Core::Scheduler::Task {
 public:
   Datalink_SX1280_V2(SX128XLT &sx1280Driver);
 
@@ -84,6 +97,19 @@ public:
   void setTxPower(int8_t power);
   void setTxMaxPower(int8_t maxTxPower);
 
+  /**
+   * @brief Set the packet framing mode.  Must be called before taskInit().
+   */
+  void setPacketMode(SX1280_PacketMode mode);
+
+  /**
+   * @brief Set the fixed on-air packet length for Limited / Fixed modes.
+   *        Must be called before taskInit().
+   * @param length  On-air byte count (including the 1-byte length prefix for
+   *                Limited mode).
+   */
+  void setFixedPacketLength(uint8_t length);
+
   /// Sets the dB the external PA adds to the output power.
   void setPAdbm(uint8_t paDbm);
 
@@ -102,6 +128,10 @@ public:
   void taskInit() override;
   void taskThread() override;
   void taskCheck() override;
+
+  // --- Debug Stuff --------------------------------------------------------
+  int getState() const { return (int)state; }
+  int64_t getLastRunTime() const { return lastRun; }
 
 private:
   // --- Constants -------------------------------------------------------------
@@ -145,14 +175,18 @@ private:
   int64_t rxDoneTimestamp = 0;
   int64_t rxIdleStartTimestamp = 0;
 
-  // --- Timeouts ------------------------------------------------
-  int64_t rxActiveTimeout = 20 * Core::MILLISECONDS;
-  int64_t txActiveTimeout = 5000 * Core::MILLISECONDS;
+  // --- Timing ------------------------------------------------
+  int64_t rxActiveTimeout = 50 * Core::MILLISECONDS;
+  int64_t txActiveTimeout = 70 * Core::MILLISECONDS;
+  // Do busy waiting earliest before this time to ensure correct tx timing.
+  // Blocks the entire system during this time.
+  int64_t txPrepareLeadTime = 3 * Core::MILLISECONDS;
 
   // --- TX pending data ----------------------------------
   uint8_t txBuffer[kMaxFrameLength];
   size_t txPendingSize = 0;
   size_t sxTxPendingSize = 0;
+  int64_t pendingTxTime = 0;
   int64_t txScheduledTime = 0;
 
   // --- Last-receive stats ----------------------------------------------------
@@ -175,12 +209,19 @@ private:
 
   uint16_t irqStatusRemain = 0;
 
+  // --- Packet mode -----------------------------------------------------------
+  bool packetParamsChanged = true;
+  SX1280_PacketMode packetMode = SX1280_PacketMode::Dynamic;
+  uint8_t fixedPacketLength = kMaxFrameLength;
+
   // --- Channel ---------------------------------------------------------------
   uint8_t currentChannel = 0;
 
   // --- Debug -----------------------------------------------------------------
   uint8_t moduleId = 0;
   int64_t lastTxPrint = 0;
+  int64_t lastRxPrint = 0;
+  int64_t lastRun = 0;
 
   // --- Handlers --------------------------------------------------------------
   Core::HandlerGroup<> transmitFinishedHandler;

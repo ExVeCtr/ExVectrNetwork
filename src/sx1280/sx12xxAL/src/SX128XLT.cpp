@@ -5174,7 +5174,8 @@ float SX128XLT::getLoRaTimeOnAirMs(uint8_t payloadBytes) {
   const bool explicitHeader = (savedPacketParam2 == 0);
   const bool crcOn = (savedPacketParam4 != 0);
 
-  return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, true, crcOn, payloadBytes);
+  return calcLoRaTimeOnAirMs(sf, bwHz, cr, preamble, explicitHeader, crcOn,
+                             payloadBytes);
 }
 
 void SX128XLT::snapshotLoRaParams() {
