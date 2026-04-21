@@ -88,6 +88,9 @@ public:
   int8_t readPacketSNR();
   uint8_t readRXPacketL();
   void setRx(uint16_t timeout);
+  void setRxContinuous();
+  void setAutoFS(bool enable);
+  void setModeFS();
   void setSyncWord1(uint32_t syncword);
   void setSyncWord2(uint32_t syncword);
   void setSyncWord3(uint32_t syncword);

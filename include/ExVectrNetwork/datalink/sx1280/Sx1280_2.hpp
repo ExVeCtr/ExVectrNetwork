@@ -157,6 +157,7 @@ private:
   bool autoRxEnabled = true;  // Auto apply mod param changes and re enter rx.
   bool rxStartedFlag = false; // Trigger mod params to apply and then enter rx.
   bool leaveRxFlag = false;   // Stop idle receive if true
+  bool acceptThisPacket = false;
 
   // --- IRQ Flags--------------------------------------------
   int64_t irqTrigTimestamp = 0;
@@ -174,10 +175,14 @@ private:
   int64_t rxStartTimestamp = 0;
   int64_t rxDoneTimestamp = 0;
   int64_t rxIdleStartTimestamp = 0;
+  int64_t lastRxSuccessTime = 0;
+  // int64_t
 
   // --- Timing ------------------------------------------------
+  // Software safety timeout — the radio now uses continuous RX (no HW
+  // timeout), so this is only a fallback in case of stuck states.
   int64_t rxActiveTimeout = 50 * Core::MILLISECONDS;
-  int64_t txActiveTimeout = 70 * Core::MILLISECONDS;
+  int64_t txActiveTimeout = 15 * Core::MILLISECONDS;
   // Do busy waiting earliest before this time to ensure correct tx timing.
   // Blocks the entire system during this time.
   int64_t txPrepareLeadTime = 3 * Core::MILLISECONDS;
@@ -283,6 +288,12 @@ private:
   void updateIdleRxState();
 
   void updateIdleState();
+
+  /**
+   * Hardware-reset the SX1280 and re-apply all configuration.
+   * Used as a last-resort recovery if the radio becomes stuck.
+   */
+  void fullReconfigure();
 };
 
 } // namespace VCTR::network::datalink

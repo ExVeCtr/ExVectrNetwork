@@ -1230,6 +1230,31 @@ void SX128XLT::setRx(uint16_t timeout) {
   writeCommand(RADIO_SET_RX, buffer, 3);
 }
 
+void SX128XLT::setRxContinuous() {
+  uint8_t buffer[3];
+
+  if (_rxtxpinmode) {
+    rxEnable();
+  }
+
+  clearIrqStatus(IRQ_RADIO_ALL);
+  buffer[0] = PERIODBASE_15_US; // 15.625us period base (like ELRS)
+  buffer[1] = 0xFF;             // timeout = 0xFFFF = continuous RX
+  buffer[2] = 0xFF;
+  writeCommand(RADIO_SET_RX, buffer, 3);
+}
+
+void SX128XLT::setAutoFS(bool enable) {
+  uint8_t val = enable ? 0x01 : 0x00;
+  writeCommand(RADIO_SET_AUTOFS, &val, 1);
+}
+
+void SX128XLT::setModeFS() {
+  // SetFs opcode = 0xC1, requires one dummy parameter byte
+  uint8_t val = 0x00;
+  writeCommand(0xC1, &val, 1);
+}
+
 void SX128XLT::setPeriodBase(uint8_t value) {
 #ifdef SX128XDEBUG
   Serial.println(F("setPeriodBase"));

@@ -158,20 +158,32 @@ void Datalink_SX1280_V2::setStartReceive(bool enable) {
   leaveRxFlag = !enable;
   if (leaveRxFlag && state == State::IdleReceive) {
     startIdle();
+    leaveRxFlag = false;
   } else if (rxStartedFlag) {
     if (state == State::Idle) {
+      // Can enter RX immediately.
+      rxStartedFlag = false;
       updateModParams();
       startIdleRx();
     } else if (state == State::IdleReceive) {
+      rxStartedFlag = false;
       if (modParamsChanged || freqChanged || packetParamsChanged) {
         updateModParams();
         startIdleRx();
       }
     }
+    // If state is Transmitting or Receiving, leave rxStartedFlag = true
+    // so the state machine enters RX once the current operation finishes.
   }
 }
 
-void Datalink_SX1280_V2::setEnableTxRx(bool enable) { txRxEnabled = enable; }
+void Datalink_SX1280_V2::setEnableTxRx(bool enable) {
+  txRxEnabled = enable;
+  // if (!txRxEnabled) {
+  //   txPendingSize = 0;
+  //   startIdle();
+  // }
+}
 
 void Datalink_SX1280_V2::setEnableAutoRx(bool enable) {
   autoRxEnabled = enable;
@@ -206,6 +218,11 @@ void Datalink_SX1280_V2::taskInit() {
   lora.setHighSensitivity();
   lora.setBufferBaseAddress(128, 0);
 
+  // Enable AutoFS: after RX/TX the radio goes to FS (frequency-synthesis)
+  // mode instead of STDBY_RC.  This keeps the PLL locked and avoids the
+  // ~200µs cold-start penalty on each RX/TX entry (ELRS pattern).
+  lora.setAutoFS(true);
+
   // Override packet params for implicit header modes.
   if (packetMode == SX1280_PacketMode::Limited) {
     // OTA size = usable payload + 1-byte length prefix
@@ -219,15 +236,19 @@ void Datalink_SX1280_V2::taskInit() {
                          LORA_IQ_NORMAL);
   }
 
-  lora.setDioIrqParams(IRQ_RADIO_ALL,
-                       (IRQ_TX_DONE /* | IRQ_PREAMBLE_DETECTED*/ | IRQ_RX_DONE |
-                        IRQ_RX_TX_TIMEOUT),
-                       0, 0);
+  // DIO1 mask: only fire the pin ISR on TX_DONE and RX_DONE.
+  // IRQ mask stays IRQ_RADIO_ALL so we can poll preamble/CRC/timeout
+  // via SPI in fetchIrqFlags() without generating spurious DIO1 edges
+  // every 15ms (the old timeout-driven ISR storm).
+  lora.setDioIrqParams(
+      IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_PREAMBLE_DETECTED | IRQ_RX_DONE), 0, 0);
 
   // Mark as applied so enterRx() doesn't redo them immediately.
   modParamsChanged = false;
   freqChanged = false;
   packetParamsChanged = false;
+
+  lastRxSuccessTime = Core::NOW();
 
   startIdle();
 }
@@ -270,14 +291,17 @@ void Datalink_SX1280_V2::taskCheck() {
 
   bool txDoneTrig = txTimeoutTrig || txDone;
 
-  bool idleRxTimeoutTrig = state == State::IdleReceive &&
-                           rxIdleStartTimestamp != 0 &&
-                           Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout;
-  bool rxActiveTrig = rxDone;
+  // Software safety: if we've been in IdleReceive longer than
+  // rxActiveTimeout with no DIO1 event, check for stuck radio.
+  bool idleRxSafetyTrig = state == State::IdleReceive &&
+                          rxIdleStartTimestamp != 0 &&
+                          Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout;
+  bool rxActiveTrig =
+      rxDone || preambleDetected || crcError || headerValid || headerError;
 
   bool txRxTimeoutTrig = rxTxTimeout;
 
-  if (txSendTrig || idleToRxIdle || txDoneTrig || idleRxTimeoutTrig ||
+  if (txSendTrig || idleToRxIdle || txDoneTrig || idleRxSafetyTrig ||
       rxActiveTrig || txRxTimeoutTrig) {
     // Serial.printf("[SX1280 %d] Triggers: txSendTrig=%d, idleToRxIdle=%d, "
     //               "txDoneTrig=%d, txTimeoutTrig=%d, "
@@ -348,9 +372,8 @@ void Datalink_SX1280_V2::fetchIrqFlags() {
 
   if (irqStatus & IRQ_PREAMBLE_DETECTED) {
     irqStatusSeen |= IRQ_PREAMBLE_DETECTED;
-    // preambleDetected = true;
-    // rxStartTimestamp = irqTrigTimestamp;
-    // rxIdleStartTimestamp = irqTrigTimestamp;
+    preambleDetected = true;
+    rxStartTimestamp = irqTrigTimestamp;
   }
 
   if (irqStatus & IRQ_HEADER_VALID) {
@@ -401,7 +424,7 @@ bool Datalink_SX1280_V2::isActivelyReceiving() const {
 bool Datalink_SX1280_V2::receiveFlagTrig() const {
   // In implicit header modes the SX1280 never fires IRQ_HEADER_VALID,
   // so only use headerValid as a trigger in Dynamic (explicit) mode.
-  return rxDone;
+  return rxDone || preambleDetected;
   // bool headerTrig = (packetMode == SX1280_PacketMode::Dynamic) &&
   // headerValid; return rxDone /* || preambleDetected*/ || crcError ||
   // headerTrig ||
@@ -430,14 +453,14 @@ void Datalink_SX1280_V2::clearAllIrqFlags() {
 }
 
 void Datalink_SX1280_V2::applyLoraParams() {
-  lora.setMode(MODE_STDBY_XOSC);
+  lora.setMode(MODE_STDBY_RC);
   lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
   modParamsChanged = false;
   state = State::Idle;
 }
 
 void Datalink_SX1280_V2::applyFreqChange() {
-  lora.setMode(MODE_STDBY_XOSC);
+  lora.setMode(MODE_STDBY_RC);
   lora.setRfFrequency(freq_hz, 0);
   freqChanged = false;
   state = State::Idle;
@@ -450,7 +473,7 @@ void Datalink_SX1280_V2::updateModParams() {
     //     "[SX1280 %d] updateModParams: modParamsChanged=%d, freqChanged=%d, "
     //     "packetParamsChanged=%d\n",
     //     moduleId, modParamsChanged, freqChanged, packetParamsChanged);
-    lora.setMode(MODE_STDBY_XOSC);
+    lora.setMode(MODE_STDBY_RC);
     if (modParamsChanged) {
       lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
       modParamsChanged = false;
@@ -545,11 +568,14 @@ void Datalink_SX1280_V2::startTx() {
   // Apply any pending frequency / modulation changes before TX so the
   // packet goes out on the correct channel (e.g. after an FHSS hop).
   updateModParams();
-  // The SX1280 only supports TX entry from STDBY or FS modes.
-  // If the radio is still in RX (e.g. IdleReceive with no pending param
-  // changes), we must force it into standby first to avoid undefined
-  // hardware behaviour that can permanently lock the radio.
-  lora.setMode(MODE_STDBY_XOSC);
+  // TX can be entered from STDBY_RC, STDBY_XOSC, or FS modes.
+  // With AutoFS enabled the radio is typically already in FS after
+  // leaving continuous RX, so we only force STDBY if the state machine
+  // thinks we're still in RX (shouldn't happen, but safety).
+  if (state == State::IdleReceive || state == State::Receiving) {
+    lora.setMode(MODE_STDBY_RC);
+    state = State::Idle;
+  }
 
   // Block until the scheduled tx time is reached.
   // Start tx should never be called more than the txPrepareLeadTime before the
@@ -564,8 +590,7 @@ void Datalink_SX1280_V2::startTx() {
 
   // if (dtime > 25) {
   // Serial.printf(
-  //     "[SX1280 %d] Time: %.3fms, Time since last tx: %.3fs, Scheduled tx at:
-  //     "
+  //     "[SX1280 %d] Time: %.3fms, Time since last tx: %.3fs, Scheduled tx at:"
   //     "%.3fms, Payload size: %d\n",
   //     moduleId, (double)txStartTimestamp / Core::MILLISECONDS, dtime,
   //     (double)txScheduledTime / Core::MILLISECONDS, sxTxPendingSize);
@@ -576,8 +601,11 @@ void Datalink_SX1280_V2::startTx() {
 }
 
 void Datalink_SX1280_V2::startIdleRx() {
-  // lora.setBufferBaseAddress(128, 0);
-  lora.setRx(rxActiveTimeout / Core::MILLISECONDS);
+  // Use continuous RX — no hardware timeout.  The radio stays listening
+  // until we explicitly change mode (for TX or channel hop).  This avoids
+  // the RX→STDBY→RX cycling every 15ms that could desynchronise the
+  // SX1280’s internal RX state machine (ELRS pattern).
+  lora.setRxContinuous();
   state = State::IdleReceive;
   rxIdleStartTimestamp = Core::NOW();
   rxStartedFlag = false;
@@ -598,17 +626,24 @@ void Datalink_SX1280_V2::startActiveRx() {
   if (rxStartTimestamp == 0) {
     rxStartTimestamp = Core::NOW();
   }
+  acceptThisPacket = txRxEnabled;
   state = State::Receiving;
 }
 
 void Datalink_SX1280_V2::startIdle() {
-  lora.setMode(MODE_STDBY_XOSC);
+  // Go to FS (frequency synthesis) instead of STDBY_RC so the PLL stays
+  // locked and the next RX/TX entry is ~60µs instead of ~200µs.
+  // With AutoFS enabled, we're usually already in FS after RX/TX, but
+  // this handles cases where we need an explicit transition.
+  lora.setModeFS();
   state = State::Idle;
 }
 
 void Datalink_SX1280_V2::retrieveRxData() {
 
   // Serial.printf("[SX1280 %d] Packet received, processing...\n", moduleId);
+
+  lastRxSuccessTime = Core::NOW();
 
   receivedDataRSSI = receivedDataRSSI * 0.8 + lora.readPacketRSSI() * 0.2;
   receivedDataSNR = receivedDataSNR * 0.8 + lora.readPacketSNR() * 0.2;
@@ -677,7 +712,7 @@ void Datalink_SX1280_V2::updateReceiveState() {
     // In implicit header modes the SX1280 never fires IRQ_HEADER_VALID,
     // so accept the packet as long as there's no CRC error.
     bool headerOk = (packetMode != SX1280_PacketMode::Dynamic) || headerValid;
-    if (!crcError && headerOk && txRxEnabled && !leaveRxFlag) {
+    if (!crcError && headerOk && acceptThisPacket && !leaveRxFlag) {
       retrieveRxData();
     }
     rxDoneTimestamp = rxStartTimestamp = 0;
@@ -685,7 +720,7 @@ void Datalink_SX1280_V2::updateReceiveState() {
     clearReceiveFlags();
   } else if (crcError || headerError || rxTxTimeout ||
              (Core::NOW() - rxStartTimestamp > rxActiveTimeout) ||
-             leaveRxFlag || !txRxEnabled) {
+             leaveRxFlag || !acceptThisPacket) {
     rxDoneTimestamp = rxStartTimestamp = 0;
     rxStartedFlag = false;
     startIdle();
@@ -713,7 +748,14 @@ void Datalink_SX1280_V2::updateTransmitState() {
   if (txDone || rxTxTimeout || timeout) {
 
     if (!txDone) {
-      startIdle();
+      // TX failed or timed out — force back to a known state.
+      // With AutoFS, the radio should be in FS after a failed TX,
+      // but force STDBY_RC to be safe on a timeout.
+      lora.setMode(MODE_STDBY_RC);
+      state = State::Idle;
+    } else {
+      // Normal TX done — AutoFS puts us in FS already.
+      state = State::Idle;
     }
 
     transmitFinishedHandler.callHandlers();
@@ -749,20 +791,29 @@ void Datalink_SX1280_V2::updateIdleRxState() {
     leaveRxFlag = false;
     startIdle();
   } else if (isActivelyReceiving()) {
+    // Highest priority: a packet is arriving — handle it now.
     startActiveRx();
     updateReceiveState();
-  } else if (rxTxTimeout) {
-    rxTxTimeout = false;
-    rxIdleStartTimestamp = 0;
-    startIdleRx();
   } else if (rxStartedFlag) {
+    // Re-entering RX after a mod-param / freq change.
     updateModParams();
     startIdleRx();
   } else if (isTxReady()) {
     startTx();
-  } else if (rxIdleStartTimestamp != 0 &&
-             Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout) {
+  } else if (Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout) {
+    // Software safety timeout — the radio is in continuous RX so this
+    // should only fire if something is wrong (no packets AND no IRQs
+    // for rxActiveTimeout).  Poll IRQ register to check if the radio
+    // is still alive, and if we haven't received anything for >2s,
+    // do a full hardware reconfigure.
     clearReceiveFlags();
+
+    if (lastRxSuccessTime != 0 &&
+        Core::NOW() - lastRxSuccessTime > 2 * Core::SECONDS) {
+      lastRxSuccessTime = Core::NOW();
+      fullReconfigure();
+    }
+
     startIdleRx();
   }
 }
@@ -780,6 +831,36 @@ void Datalink_SX1280_V2::updateIdleState() {
     updateModParams();
     startIdleRx();
   }
+}
+
+void Datalink_SX1280_V2::fullReconfigure() {
+  // Hardware reset — toggles NRESET to force the SX1280 out of any
+  // stuck internal state (e.g. desynchronised RX chain after many
+  // consecutive timeouts in implicit-header mode).
+  lora.resetDevice();
+
+  lora.setupLoRa(freq_hz, 0, spreadingFactor, bandwidth, codingRate, false);
+  lora.setHighSensitivity();
+  lora.setBufferBaseAddress(128, 0);
+  lora.setAutoFS(true);
+
+  if (packetMode == SX1280_PacketMode::Limited) {
+    lora.setPacketParams(12, LORA_PACKET_FIXED_LENGTH, fixedPacketLength + 1,
+                         LORA_CRC_ON, LORA_IQ_NORMAL);
+  } else if (packetMode == SX1280_PacketMode::Fixed) {
+    lora.setPacketParams(12, LORA_PACKET_FIXED_LENGTH, fixedPacketLength,
+                         LORA_CRC_ON, LORA_IQ_NORMAL);
+  } else {
+    lora.setPacketParams(12, LORA_PACKET_VARIABLE_LENGTH, 255, LORA_CRC_ON,
+                         LORA_IQ_NORMAL);
+  }
+  lora.setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_RX_DONE), 0, 0);
+
+  modParamsChanged = false;
+  freqChanged = false;
+  packetParamsChanged = false;
+  state = State::Idle;
+  clearAllIrqFlags();
 }
 
 } // namespace VCTR::network::datalink
