@@ -70,13 +70,13 @@ void Datalink::taskInit() {
   transmitting_ = false;
   physicalBlocked_ = true;
   physicalBlockTimestamp_ =
-      Core::NOW() - 1 * Core::SECONDS; // Listen for an extra second.
+      Core::NowNs() - 1 * Core::SECONDS; // Listen for an extra second.
 }
 
 void Datalink::taskThread() {
 
   VRBS_MSG("Datalink thread running. Pointer %d. Time: %f\n", this,
-           Core::NOWSeconds());
+           Core::NowS());
 
   // Read from physical and check status
   auto readLen = physicalLayer_->readable();
@@ -93,7 +93,7 @@ void Datalink::taskThread() {
       case PhysicalHeader::BLOCK: // Physical is now in use by another node.
         transmitting_ = false;
         physicalBlocked_ = true;
-        physicalBlockTimestamp_ = Core::NOW();
+        physicalBlockTimestamp_ = Core::NowNs();
 
         VRBS_MSG("Header is block.\n");
 
@@ -104,7 +104,7 @@ void Datalink::taskThread() {
         transmitting_ = false;
         physicalBlocked_ = true;
         receiving_ = true;
-        physicalBlockTimestamp_ = Core::NOW();
+        physicalBlockTimestamp_ = Core::NowNs();
 
         physicalLayer_->readByte(data);
         numBytesReceive_ = data;
@@ -143,7 +143,7 @@ void Datalink::taskThread() {
 
     if (receiving_) {
 
-      physicalBlockTimestamp_ = Core::NOW(); // Reset timeout
+      physicalBlockTimestamp_ = Core::NowNs(); // Reset timeout
 
       uint8_t size = numBytesReceive_;
       if (size > readLen)
@@ -173,7 +173,7 @@ void Datalink::taskThread() {
 
   // Check if timeout was reached for physical access. In this case we can reset
   // access.
-  if (Core::NOW() - physicalBlockTimestamp_ > physicalReleaseTime_) {
+  if (Core::NowNs() - physicalBlockTimestamp_ > physicalReleaseTime_) {
     physicalBlockTimestamp_ =
         Core::END_OF_TIME; // END_OF_TIME to stop this from triggering again.
     physicalBlocked_ = false;
@@ -229,7 +229,7 @@ void Datalink::taskCheck() {
   if (transmitBuffer_.size() > 0 ||
       (transmitting_ && physicalLayer_->writable() > 0) ||
       physicalLayer_->readable() > 0) {
-    setRelease(Core::NOW());
+    setRelease(Core::NowNs());
   }
 }
 

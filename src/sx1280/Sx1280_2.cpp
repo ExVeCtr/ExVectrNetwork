@@ -77,7 +77,7 @@ bool Datalink_SX1280_V2::transmitDataframe(const DataPacket &dataframe) {
   }
 
   auto scheduledTxTime =
-      dataframe.timestamp == 0 ? Core::NOW() : dataframe.timestamp;
+      dataframe.timestamp == 0 ? Core::NowNs() : dataframe.timestamp;
 
   if (sxTxPendingSize == 0 &&
       (state == State::Idle || state == State::IdleReceive)) {
@@ -134,7 +134,7 @@ void Datalink_SX1280_V2::setCodingRate(SX1280_CR cr) {
 void Datalink_SX1280_V2::setTxPower(int8_t power) { txPower = power; }
 
 void Datalink_SX1280_V2::setTxMaxPower(int8_t maxTxPower) {
-  maxTxPower = maxTxPower;
+  this->maxTxPower = maxTxPower;
 }
 
 void Datalink_SX1280_V2::setPAdbm(uint8_t paDbm) { paGain = paDbm; }
@@ -206,7 +206,7 @@ void Datalink_SX1280_V2::taskInit() {
     Serial.printf("[SX1280 %d] Device check FAILED\n", moduleId);
 #endif
     setInitialised(false);
-    this->setRelease(Core::NOW() + 1 * Core::SECONDS);
+    this->setRelease(Core::NowNs() + 1 * Core::SECONDS);
     return;
   }
 
@@ -248,7 +248,7 @@ void Datalink_SX1280_V2::taskInit() {
   freqChanged = false;
   packetParamsChanged = false;
 
-  lastRxSuccessTime = Core::NOW();
+  lastRxSuccessTime = Core::NowNs();
 
   startIdle();
 }
@@ -272,12 +272,12 @@ void Datalink_SX1280_V2::taskCheck() {
   // if (paramsUpdate || irqTrig || rxReady || txReady || txPrepare || startRx
   // ||
   //     stopIdleRx || txDone) {
-  //   setDeadline(Core::NOW());
+  //   setDeadline(Core::NowNs());
   // }
 
   // If dio1 IRQ triggered, run immediately.
   if (irqTrigTimestamp) {
-    setDeadline(Core::NOW());
+    setDeadline(Core::NowNs());
     // Serial.printf("[SX1280 %d] DIO1 IRQ triggered.\n", moduleId);
     return;
   }
@@ -287,15 +287,15 @@ void Datalink_SX1280_V2::taskCheck() {
   bool idleToRxIdle = rxStartedFlag && state == State::Idle;
 
   bool txTimeoutTrig = state == State::Transmitting && txStartTimestamp != 0 &&
-                       Core::NOW() - txStartTimestamp > txActiveTimeout;
+                       Core::NowNs() - txStartTimestamp > txActiveTimeout;
 
   bool txDoneTrig = txTimeoutTrig || txDone;
 
   // Software safety: if we've been in IdleReceive longer than
   // rxActiveTimeout with no DIO1 event, check for stuck radio.
-  bool idleRxSafetyTrig = state == State::IdleReceive &&
-                          rxIdleStartTimestamp != 0 &&
-                          Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout;
+  bool idleRxSafetyTrig =
+      state == State::IdleReceive && rxIdleStartTimestamp != 0 &&
+      Core::NowNs() - rxIdleStartTimestamp > rxActiveTimeout;
   bool rxActiveTrig =
       rxDone || preambleDetected || crcError || headerValid || headerError;
 
@@ -310,7 +310,7 @@ void Datalink_SX1280_V2::taskCheck() {
     //               (int)idleToRxIdle, (int)txDoneTrig, (int)txTimeoutTrig,
     //               (int)idleRxTimeoutTrig, (int)rxActiveTrig,
     //               (int)txRxTimeoutTrig);
-    setDeadline(Core::NOW());
+    setDeadline(Core::NowNs());
   }
 }
 
@@ -319,7 +319,7 @@ void Datalink_SX1280_V2::taskThread() {
   // Serial.printf("[SX1280 %d] Task thread Start. State: %d\n", moduleId,
   //               (int)state);
 
-  auto threadStartTime = Core::NOW();
+  auto threadStartTime = Core::NowNs();
 
   fetchIrqFlags();
 
@@ -353,14 +353,14 @@ void Datalink_SX1280_V2::taskThread() {
   }
 
   irqTrigTimestamp = 0; // reset for next DIO1 event
-  lastRun = Core::NOW();
+  lastRun = Core::NowNs();
 
   setRelease(Core::END_OF_TIME);
 }
 
 void Datalink_SX1280_V2::fetchIrqFlags() {
 
-  int64_t now = Core::NOW();
+  int64_t now = Core::NowNs();
 
   // Read dio1 if its not been done yet.
   if (irqTrigTimestamp == 0) {
@@ -433,7 +433,7 @@ bool Datalink_SX1280_V2::receiveFlagTrig() const {
 
 bool Datalink_SX1280_V2::isTxReady() const {
   return sxTxPendingSize > 0 &&
-         Core::NOW() > (txScheduledTime - txPrepareLeadTime) &&
+         Core::NowNs() > (txScheduledTime - txPrepareLeadTime) &&
          state != State::Transmitting;
 }
 
@@ -464,15 +464,16 @@ void Datalink_SX1280_V2::applyFreqChange() {
   lora.setRfFrequency(freq_hz, 0);
   freqChanged = false;
   state = State::Idle;
-  // Serial.printf("[SX1280 %d] Frequency set to %lu Hz\n", moduleId, freq_hz);
+  // Serial.printf("[SX1280 %d] Frequency set to %lu Hz\n", moduleId,
+  // freq_hz);
 }
 
 void Datalink_SX1280_V2::updateModParams() {
   if (modParamsChanged || freqChanged || packetParamsChanged) {
     // Serial.printf(
-    //     "[SX1280 %d] updateModParams: modParamsChanged=%d, freqChanged=%d, "
-    //     "packetParamsChanged=%d\n",
-    //     moduleId, modParamsChanged, freqChanged, packetParamsChanged);
+    //     "[SX1280 %d] updateModParams: modParamsChanged=%d, freqChanged=%d,
+    //     " "packetParamsChanged=%d\n", moduleId, modParamsChanged,
+    //     freqChanged, packetParamsChanged);
     lora.setMode(MODE_STDBY_RC);
     if (modParamsChanged) {
       lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
@@ -502,7 +503,7 @@ void Datalink_SX1280_V2::updateModParams() {
 
 void Datalink_SX1280_V2::prepareTx(const uint8_t *data, size_t size,
                                    int64_t txStart) {
-  txScheduledTime = txStart == 0 ? Core::NOW() : txStart;
+  txScheduledTime = txStart == 0 ? Core::NowNs() : txStart;
 
   switch (packetMode) {
   case SX1280_PacketMode::Limited: {
@@ -554,10 +555,13 @@ void Datalink_SX1280_V2::prepareTx(const uint8_t *data, size_t size,
     power = maxTxPower;
   power = power - (int8_t)paGain;
 
-  if (lastTxPower != power) {
-    lora.setTxParams(power, RAMP_TIME);
-    lastTxPower = power;
+  if (power < -18) {
+    power = -18;
+  } else if (power > 12) {
+    power = 12;
   }
+
+  lora.setTxParams(power, RAMP_TIME);
 
   txPendingSize = 0;
 
@@ -578,19 +582,21 @@ void Datalink_SX1280_V2::startTx() {
   }
 
   // Block until the scheduled tx time is reached.
-  // Start tx should never be called more than the txPrepareLeadTime before the
-  // scheduled time, so this should never be a long wait.
-  while (Core::NOW() < txScheduledTime)
+  // Start tx should never be called more than the txPrepareLeadTime before
+  // the scheduled time, so this should never be a long wait.
+  while (Core::NowNs() < txScheduledTime)
     ;
-  txStartTimestamp = Core::NOW();
+  txStartTimestamp = Core::NowNs();
   lora.setTx(txActiveTimeout / Core::MILLISECONDS);
   state = State::Transmitting;
 
-  // auto dtime = (double)(txStartTimestamp - lastTxPrint) / Core::MILLISECONDS;
+  // auto dtime = (double)(txStartTimestamp - lastTxPrint) /
+  // Core::MILLISECONDS;
 
   // if (dtime > 25) {
   // Serial.printf(
-  //     "[SX1280 %d] Time: %.3fms, Time since last tx: %.3fs, Scheduled tx at:"
+  //     "[SX1280 %d] Time: %.3fms, Time since last tx: %.3fs, Scheduled tx
+  //     at:"
   //     "%.3fms, Payload size: %d\n",
   //     moduleId, (double)txStartTimestamp / Core::MILLISECONDS, dtime,
   //     (double)txScheduledTime / Core::MILLISECONDS, sxTxPendingSize);
@@ -607,24 +613,26 @@ void Datalink_SX1280_V2::startIdleRx() {
   // SX1280’s internal RX state machine (ELRS pattern).
   lora.setRxContinuous();
   state = State::IdleReceive;
-  rxIdleStartTimestamp = Core::NOW();
+  rxIdleStartTimestamp = Core::NowNs();
   rxStartedFlag = false;
   leaveRxFlag = false;
   // auto dTime =
   //     (double)(rxIdleStartTimestamp - lastRxPrint) / Core::MILLISECONDS;
   // Serial.printf(
-  //     "[SX1280 %d] Entering IdleReceive state, time since last rx: %.3fs\n",
-  //     moduleId, dTime);
+  //     "[SX1280 %d] Entering IdleReceive state, time since last rx:
+  //     %.3fs\n", moduleId, dTime);
   // lastRxPrint = rxIdleStartTimestamp;
+
+  // Serial.printf("[SX1280 %d] Entering IdleReceive state.\n", moduleId);
 }
 
 void Datalink_SX1280_V2::startActiveRx() {
   // irqStatusRemain |=
-  //     (crcError ? IRQ_CRC_ERROR : 0) | (headerError ? IRQ_HEADER_ERROR : 0) |
-  //     (preambleDetected ? IRQ_PREAMBLE_DETECTED : 0) |
-  //     (headerValid ? IRQ_HEADER_VALID : 0) | (rxDone ? IRQ_RX_DONE : 0);
+  //     (crcError ? IRQ_CRC_ERROR : 0) | (headerError ? IRQ_HEADER_ERROR : 0)
+  //     | (preambleDetected ? IRQ_PREAMBLE_DETECTED : 0) | (headerValid ?
+  //     IRQ_HEADER_VALID : 0) | (rxDone ? IRQ_RX_DONE : 0);
   if (rxStartTimestamp == 0) {
-    rxStartTimestamp = Core::NOW();
+    rxStartTimestamp = Core::NowNs();
   }
   acceptThisPacket = txRxEnabled;
   state = State::Receiving;
@@ -641,9 +649,7 @@ void Datalink_SX1280_V2::startIdle() {
 
 void Datalink_SX1280_V2::retrieveRxData() {
 
-  // Serial.printf("[SX1280 %d] Packet received, processing...\n", moduleId);
-
-  lastRxSuccessTime = Core::NOW();
+  lastRxSuccessTime = Core::NowNs();
 
   receivedDataRSSI = receivedDataRSSI * 0.8 + lora.readPacketRSSI() * 0.2;
   receivedDataSNR = receivedDataSNR * 0.8 + lora.readPacketSNR() * 0.2;
@@ -719,7 +725,7 @@ void Datalink_SX1280_V2::updateReceiveState() {
     startIdle();
     clearReceiveFlags();
   } else if (crcError || headerError || rxTxTimeout ||
-             (Core::NOW() - rxStartTimestamp > rxActiveTimeout) ||
+             (Core::NowNs() - rxStartTimestamp > rxActiveTimeout) ||
              leaveRxFlag || !acceptThisPacket) {
     rxDoneTimestamp = rxStartTimestamp = 0;
     rxStartedFlag = false;
@@ -744,7 +750,7 @@ void Datalink_SX1280_V2::updateReceiveState() {
 
 void Datalink_SX1280_V2::updateTransmitState() {
 
-  bool timeout = Core::NOW() - txStartTimestamp > txActiveTimeout;
+  bool timeout = Core::NowNs() - txStartTimestamp > txActiveTimeout;
   if (txDone || rxTxTimeout || timeout) {
 
     if (!txDone) {
@@ -800,7 +806,7 @@ void Datalink_SX1280_V2::updateIdleRxState() {
     startIdleRx();
   } else if (isTxReady()) {
     startTx();
-  } else if (Core::NOW() - rxIdleStartTimestamp > rxActiveTimeout) {
+  } else if (Core::NowNs() - rxIdleStartTimestamp > rxActiveTimeout) {
     // Software safety timeout — the radio is in continuous RX so this
     // should only fire if something is wrong (no packets AND no IRQs
     // for rxActiveTimeout).  Poll IRQ register to check if the radio
@@ -809,8 +815,8 @@ void Datalink_SX1280_V2::updateIdleRxState() {
     clearReceiveFlags();
 
     if (lastRxSuccessTime != 0 &&
-        Core::NOW() - lastRxSuccessTime > 2 * Core::SECONDS) {
-      lastRxSuccessTime = Core::NOW();
+        Core::NowNs() - lastRxSuccessTime > 2 * Core::SECONDS) {
+      lastRxSuccessTime = Core::NowNs();
       fullReconfigure();
     }
 

@@ -34,8 +34,8 @@ constexpr bool LOW = false;
 constexpr bool HIGH = true;
 
 inline void delay(uint32_t ms) {
-  const int64_t start = Core::NOW();
-  while (Core::NOW() - start < static_cast<int64_t>(ms) * Core::MILLISECONDS) {
+  const int64_t start = Core::NowNs();
+  while (Core::NowNs() - start < static_cast<int64_t>(ms) * Core::MILLISECONDS) {
   }
 }
 
@@ -176,10 +176,10 @@ void SX128XLT::checkBusy() {
   LOG_MSG(("checkBusy() Revised"));
 #endif
 
-  int64_t startmS = Core::NOW();
+  int64_t startmS = Core::NowNs();
 
   while (_RFBUSY.getPinValue()) {
-    if (Core::NOW() - startmS > 20 * Core::MILLISECONDS) {
+    if (Core::NowNs() - startmS > 20 * Core::MILLISECONDS) {
       LOG_MSG("ERROR - Busy Timeout!\n");
       resetDevice();
       // setMode(MODE_STDBY_RC);
@@ -333,12 +333,12 @@ void SX128XLT::resetDevice() {
   // attempt to toggle pin
 
   _NRESET.setPinValue(false);
-  auto start = Core::NOW();
-  while (Core::NOW() - start < 50 * Core::MILLISECONDS) {
+  auto start = Core::NowNs();
+  while (Core::NowNs() - start < 50 * Core::MILLISECONDS) {
   }
   _NRESET.setPinValue(true);
-  start = Core::NOW();
-  while (Core::NOW() - start < 20 * Core::MILLISECONDS) {
+  start = Core::NowNs();
+  while (Core::NowNs() - start < 20 * Core::MILLISECONDS) {
   }
 }
 

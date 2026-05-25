@@ -49,8 +49,8 @@ bool NetworkNode::isNodeReachable(uint16_t nodeAddress) {
 
 void NetworkNode::taskThread() {
 
-  if (Core::NOW() - lastSend_ > sendInterval_) {
-    lastSend_ = Core::NOW();
+  if (Core::NowNs() - lastSend_ > sendInterval_) {
+    lastSend_ = Core::NowNs();
     NetworkPacketHeader header;
     header.type = NetworkPacketType::HEARTBEAT;
     header.hops = 0;
@@ -61,7 +61,7 @@ void NetworkNode::taskThread() {
 
   // Check if any nodes are unreachable
   for (size_t i = 0; i < nodeList_.size(); i++) {
-    if (Core::NOW() - nodeList_[i].lastSeen > timeoutInterval_) {
+    if (Core::NowNs() - nodeList_[i].lastSeen > timeoutInterval_) {
       nodeList_.removeAtIndex(i);
       i--;
     }
@@ -95,7 +95,7 @@ void NetworkNode::sendPacket(const NetworkPacketHeader &header,
   for (size_t i = 0; i < datalinks_.size(); i++) {
     datalinks_[i]->transmitDataframe(packetSend);
   }
-  lastSend_ = Core::NOW(); // Update the last send time.
+  lastSend_ = Core::NowNs(); // Update the last send time.
 }
 
 size_t NetworkNode::getMaxPacketSize() const {
@@ -122,7 +122,7 @@ void NetworkNode::receivePacket(const DataPacket &data) {
   bool found = false;
   for (size_t i = 0; i < nodeList_.size(); i++) {
     if (nodeList_[i].nodeAddress == header.srcAddress) {
-      nodeList_[i].lastSeen = Core::NOW();
+      nodeList_[i].lastSeen = Core::NowNs();
       found = true;
       break;
     }
@@ -131,7 +131,7 @@ void NetworkNode::receivePacket(const DataPacket &data) {
   {
     NodeInfo nodeInfo;
     nodeInfo.nodeAddress = header.srcAddress;
-    nodeInfo.lastSeen = Core::NOW();
+    nodeInfo.lastSeen = Core::NowNs();
     nodeList_.appendIfNotInListArray(nodeInfo);
   }
 
