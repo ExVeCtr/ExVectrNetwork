@@ -145,8 +145,8 @@ private:
   // timeout), so this is only a fallback in case of stuck states.
   int64_t rxActiveTimeout = 50 * Core::MILLISECONDS;
   int64_t txActiveTimeout = 15 * Core::MILLISECONDS;
-  // Do busy waiting earliest before this time to ensure correct tx timing.
-  // Blocks the entire system during this time.
+  // Earliest time before scheduled TX when the state machine may prepare/start
+  // TX.
   int64_t txPrepareLeadTime = 3 * Core::MILLISECONDS;
 
   // --- TX pending data ----------------------------------

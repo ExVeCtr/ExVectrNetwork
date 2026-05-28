@@ -240,8 +240,7 @@ void Datalink_SX1280_V2::taskInit() {
   // IRQ mask stays IRQ_RADIO_ALL so we can poll preamble/CRC/timeout
   // via SPI in fetchIrqFlags() without generating spurious DIO1 edges
   // every 15ms (the old timeout-driven ISR storm).
-  lora.setDioIrqParams(
-      IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_PREAMBLE_DETECTED | IRQ_RX_DONE), 0, 0);
+  lora.setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_RX_DONE), 0, 0);
 
   // Mark as applied so enterRx() doesn't redo them immediately.
   modParamsChanged = false;
@@ -280,6 +279,19 @@ void Datalink_SX1280_V2::taskCheck() {
     setDeadline(Core::NowNs());
     // Serial.printf("[SX1280 %d] DIO1 IRQ triggered.\n", moduleId);
     return;
+  }
+
+  // If TX is queued for a future timestamp, schedule a wakeup at the
+  // configured lead-time boundary so startTx() can wait only a short time.
+  if (sxTxPendingSize > 0 && txScheduledTime != 0 &&
+      state != State::Transmitting) {
+    int64_t now = Core::NowNs();
+    int64_t wakeTime = txScheduledTime - txPrepareLeadTime;
+    if (wakeTime < now) {
+      wakeTime = now;
+    }
+    setRelease(wakeTime);
+    setDeadline(wakeTime);
   }
 
   bool txSendTrig =
@@ -355,7 +367,21 @@ void Datalink_SX1280_V2::taskThread() {
   irqTrigTimestamp = 0; // reset for next DIO1 event
   lastRun = Core::NowNs();
 
-  setRelease(Core::END_OF_TIME);
+  // Keep polling TX IRQ status while transmitting so TX_DONE is still detected
+  // even if a DIO edge is missed; otherwise cadence can collapse to timeout
+  // pacing.
+  if (state == State::Transmitting && txStartTimestamp != 0 && !txDone &&
+      !rxTxTimeout) {
+    int64_t nextPoll = Core::NowNs() + 200 * Core::MICROSECONDS;
+    int64_t timeoutAt = txStartTimestamp + txActiveTimeout;
+    if (nextPoll > timeoutAt) {
+      nextPoll = timeoutAt;
+    }
+    setRelease(nextPoll);
+    setDeadline(nextPoll);
+  } else {
+    setRelease(Core::END_OF_TIME);
+  }
 }
 
 void Datalink_SX1280_V2::fetchIrqFlags() {
@@ -453,14 +479,14 @@ void Datalink_SX1280_V2::clearAllIrqFlags() {
 }
 
 void Datalink_SX1280_V2::applyLoraParams() {
-  lora.setMode(MODE_STDBY_RC);
+  lora.setMode(MODE_STDBY_XOSC);
   lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
   modParamsChanged = false;
   state = State::Idle;
 }
 
 void Datalink_SX1280_V2::applyFreqChange() {
-  lora.setMode(MODE_STDBY_RC);
+  lora.setMode(MODE_STDBY_XOSC);
   lora.setRfFrequency(freq_hz, 0);
   freqChanged = false;
   state = State::Idle;
@@ -474,7 +500,7 @@ void Datalink_SX1280_V2::updateModParams() {
     //     "[SX1280 %d] updateModParams: modParamsChanged=%d, freqChanged=%d,
     //     " "packetParamsChanged=%d\n", moduleId, modParamsChanged,
     //     freqChanged, packetParamsChanged);
-    lora.setMode(MODE_STDBY_RC);
+    lora.setMode(MODE_STDBY_XOSC);
     if (modParamsChanged) {
       lora.setModulationParams(spreadingFactor, bandwidth, codingRate);
       modParamsChanged = false;
@@ -569,38 +595,42 @@ void Datalink_SX1280_V2::prepareTx(const uint8_t *data, size_t size,
 }
 
 void Datalink_SX1280_V2::startTx() {
-  // Apply any pending frequency / modulation changes before TX so the
-  // packet goes out on the correct channel (e.g. after an FHSS hop).
+
   updateModParams();
   // TX can be entered from STDBY_RC, STDBY_XOSC, or FS modes.
   // With AutoFS enabled the radio is typically already in FS after
   // leaving continuous RX, so we only force STDBY if the state machine
   // thinks we're still in RX (shouldn't happen, but safety).
   if (state == State::IdleReceive || state == State::Receiving) {
-    lora.setMode(MODE_STDBY_RC);
+    lora.setMode(MODE_STDBY_XOSC);
     state = State::Idle;
   }
 
   // Block until the scheduled tx time is reached.
   // Start tx should never be called more than the txPrepareLeadTime before
   // the scheduled time, so this should never be a long wait.
+  auto waitStart = Core::NowNs();
   while (Core::NowNs() < txScheduledTime)
     ;
   txStartTimestamp = Core::NowNs();
   lora.setTx(txActiveTimeout / Core::MILLISECONDS);
   state = State::Transmitting;
 
-  // auto dtime = (double)(txStartTimestamp - lastTxPrint) /
-  // Core::MILLISECONDS;
-
-  // if (dtime > 25) {
-  // Serial.printf(
-  //     "[SX1280 %d] Time: %.3fms, Time since last tx: %.3fs, Scheduled tx
-  //     at:"
-  //     "%.3fms, Payload size: %d\n",
-  //     moduleId, (double)txStartTimestamp / Core::MILLISECONDS, dtime,
-  //     (double)txScheduledTime / Core::MILLISECONDS, sxTxPendingSize);
+  // double deltaMs = 0.0;
+  // double busyWaiting = 0;
+  // if (lastTxPrint != 0) {
+  //   busyWaiting =
+  //       (double)(txStartTimestamp - waitStart) / (double)Core::MILLISECONDS;
+  //   deltaMs =
+  //       (double)(txStartTimestamp - lastTxPrint) /
+  //       (double)Core::MILLISECONDS;
   // }
+  // Serial.print("SX1280 ");
+  // Serial.print(moduleId);
+  // Serial.print(" TX dt ms: ");
+  // Serial.print(deltaMs, 3);
+  // Serial.print(" busy wait ms: ");
+  // Serial.println(busyWaiting, 3);
   // lastTxPrint = txStartTimestamp;
 
   txScheduledTime = 0;
@@ -643,7 +673,7 @@ void Datalink_SX1280_V2::startIdle() {
   // locked and the next RX/TX entry is ~60µs instead of ~200µs.
   // With AutoFS enabled, we're usually already in FS after RX/TX, but
   // this handles cases where we need an explicit transition.
-  lora.setModeFS();
+  lora.setMode(MODE_STDBY_XOSC);
   state = State::Idle;
 }
 
@@ -651,7 +681,7 @@ void Datalink_SX1280_V2::retrieveRxData() {
 
   lastRxSuccessTime = Core::NowNs();
 
-  receivedDataRSSI = receivedDataRSSI * 0.8 + lora.readPacketRSSI() * 0.2;
+  receivedDataRSSI = receivedDataRSSI * 0.9 + lora.readPacketRSSI() * 0.1;
   receivedDataSNR = receivedDataSNR * 0.8 + lora.readPacketSNR() * 0.2;
 
   size_t otaLen;  // bytes read from radio buffer
@@ -756,8 +786,8 @@ void Datalink_SX1280_V2::updateTransmitState() {
     if (!txDone) {
       // TX failed or timed out — force back to a known state.
       // With AutoFS, the radio should be in FS after a failed TX,
-      // but force STDBY_RC to be safe on a timeout.
-      lora.setMode(MODE_STDBY_RC);
+      // but force STDBY_XOSC to be safe on a timeout.
+      lora.setMode(MODE_STDBY_XOSC);
       state = State::Idle;
     } else {
       // Normal TX done — AutoFS puts us in FS already.
