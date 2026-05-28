@@ -20,6 +20,36 @@
 
 namespace VCTR::network::datalink {
 
+class Sx1280_DirectI : public VCTR::network::physical::HasChannels {
+public:
+  virtual ~Sx1280_DirectI() = default;
+
+  virtual bool configureRadio() = 0;
+
+  virtual void startRx(int64_t timeout) = 0;
+  virtual int16_t getPacketRSSI() const = 0;
+  virtual int16_t getPacketSNR() const = 0;
+  virtual network::DataPacket getRxPacket() const = 0;
+  virtual uint32_t getRxPacketCount() const = 0;
+
+  virtual bool setupTxPacket(const network::DataPacket &packet) = 0;
+  virtual void startTx() = 0;
+
+  virtual void setFrequency(uint32_t newFreqHz) = 0;
+  virtual void setSpreadingFactor(SX1280_SF sf) = 0;
+  virtual void setBandwidth(SX1280_BW bw) = 0;
+  virtual void setCodingRate(SX1280_CR cr) = 0;
+  virtual void setTxPower(int8_t power) = 0;
+  virtual uint8_t getTxPower() const = 0;
+  virtual void setTxMaxPower(int8_t maxTxPower) = 0;
+  virtual void setPacketMode(SX1280_PacketMode mode) = 0;
+  virtual void setFixedPacketLength(uint8_t length) = 0;
+  virtual void setPAdbm(uint8_t paDbm) = 0;
+
+  virtual void push(bool keepOscRunning = false) = 0;
+  virtual void pull() = 0;
+};
+
 /**
  * @brief Thin staged-control wrapper for the SX1280 LoRa transceiver.
  *
@@ -29,22 +59,22 @@ namespace VCTR::network::datalink {
  * timing-critical command that begins the operation. pull() polls IRQ state and
  * harvests any completed RX packet.
  */
-class Sx1280_Direct : public VCTR::network::physical::HasChannels {
+class Sx1280_Direct : public Sx1280_DirectI {
 public:
   Sx1280_Direct(SX128XLT &sx1280Driver);
 
-  bool configureRadio();
+  bool configureRadio() override;
 
   // --- Receiving -----------------------------------------
-  void startRx(int64_t timeout);
-  int16_t getPacketRSSI() const;
-  int16_t getPacketSNR() const;
-  network::DataPacket getRxPacket() const;
-  uint32_t getRxPacketCount() const;
+  void startRx(int64_t timeout) override;
+  int16_t getPacketRSSI() const override;
+  int16_t getPacketSNR() const override;
+  network::DataPacket getRxPacket() const override;
+  uint32_t getRxPacketCount() const override;
 
   // --- Transmitting ---------------------------------------------
-  bool setupTxPacket(const network::DataPacket &packet);
-  void startTx();
+  bool setupTxPacket(const network::DataPacket &packet) override;
+  void startTx() override;
   uint32_t getTxPacketCount() const;
 
   uint8_t *getTxBufferPtr();
@@ -56,18 +86,18 @@ public:
   void setChannel(size_t channel) override;
 
   // --- Configuration ---------------------------------------------------------
-  void setFrequency(uint32_t newFreqHz);
-  void setSpreadingFactor(SX1280_SF sf);
-  void setBandwidth(SX1280_BW bw);
-  void setCodingRate(SX1280_CR cr);
-  void setTxPower(int8_t power);
-  uint8_t getTxPower() const { return txPower; }
-  void setTxMaxPower(int8_t maxTxPower);
+  void setFrequency(uint32_t newFreqHz) override;
+  void setSpreadingFactor(SX1280_SF sf) override;
+  void setBandwidth(SX1280_BW bw) override;
+  void setCodingRate(SX1280_CR cr) override;
+  void setTxPower(int8_t power) override;
+  uint8_t getTxPower() const override { return txPower; }
+  void setTxMaxPower(int8_t maxTxPower) override;
 
   /**
    * @brief Set the packet framing mode.  Must be called before taskInit().
    */
-  void setPacketMode(SX1280_PacketMode mode);
+  void setPacketMode(SX1280_PacketMode mode) override;
 
   /**
    * @brief Set the fixed on-air packet length for Limited / Fixed modes.
@@ -75,25 +105,28 @@ public:
    * @param length  User payload length for Limited mode and exact payload
    *                length for Fixed mode.
    */
-  void setFixedPacketLength(uint8_t length);
+  void setFixedPacketLength(uint8_t length) override;
 
   /// Sets the dB the external PA adds to the output power.
-  void setPAdbm(uint8_t paDbm);
+  void setPAdbm(uint8_t paDbm) override;
 
   /**
    * @brief Apply any pending configuration changes (frequency, modulation,
    * packet), also places the to tx packet into the SX1280 buffer if
    * setupTxPacket was called.
    */
-  void push(bool keepOscRunning = false);
+  void push(bool keepOscRunning = false) override;
   /**
    * @brief Polls the radio for IRQ flags and rx packet.
    */
-  void pull();
+  void pull() override;
 
   // --- Interrupt and flags ------------------------------
   void notifyDio1Irq(int64_t timestamp, bool force = false);
   void fetchIrqFlags();
+
+  /// Returns true after configureRadio() has been called successfully.
+  bool isConfigured() const { return state != State::Sleep; }
 
 private:
   // --- Constants -------------------------------------------------------------

@@ -159,8 +159,14 @@ void Sx1280_Direct::setFixedPacketLength(uint8_t length) {
 void Sx1280_Direct::setPAdbm(uint8_t paDbm) { paGain = paDbm; }
 
 void Sx1280_Direct::push(bool keepOscRunning) {
-  clearIrqFlags();
-  lora.clearIrqStatus(IRQ_RADIO_ALL);
+  const bool needsRadioUpdate = state != State::Idle || modParamsChanged ||
+                                freqChanged || packetParamsChanged ||
+                                txPacketPending;
+
+  if (!needsRadioUpdate) {
+    return;
+  }
+
   lora.setMode(keepOscRunning ? MODE_STDBY_XOSC : MODE_STDBY_RC);
   state = State::Idle;
 
