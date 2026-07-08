@@ -262,7 +262,7 @@ void Sx1280_Direct::pull() {
         packetMode != SX1280_PacketMode::Dynamic || headerValid;
 
     if (!crcError && !headerError && headerOk) {
-      readCompletedPacket();
+      readCompletedPacketStatus();
       ++rxPacketCount;
     }
 
@@ -445,7 +445,7 @@ void Sx1280_Direct::prepareTxPacket(const uint8_t *data, size_t size) {
   lora.setTxParams(getAppliedTxPower(), RAMP_TIME);
 }
 
-void Sx1280_Direct::readCompletedPacket() {
+void Sx1280_Direct::readCompletedPacketStatus() {
   // Single combined status read instead of separate readPacketRSSI() +
   // readPacketSNR() calls -- see readPacketRSSISNR() for why (avoids 3
   // redundant RADIO_GET_PACKETSTATUS SPI+checkBusy() round trips down to 1).
@@ -455,7 +455,34 @@ void Sx1280_Direct::readCompletedPacket() {
   lora.readPacketRSSISNR(receivedDataRSSI, snr);
   receivedDataSNR = snr;
 
+  // Only the cheap status is read here -- readRXPacketL() (Dynamic mode) is
+  // itself just a RADIO_GET_RXBUFFERSTATUS status command, not a FIFO read.
+  // The actual payload bytes are deliberately NOT fetched from the FIFO here;
+  // that only happens in fetchRxPayload(), called once the caller (in
+  // diversity, only after comparing RSSI/SNR across radios) actually needs
+  // this packet's data. See fetchRxPayload()'s and Sx1280_DirectI's doc
+  // comments for why.
   lastRxPacket.timestamp = lastRxTimestamp;
+
+  if (packetMode == SX1280_PacketMode::Limited ||
+      packetMode == SX1280_PacketMode::Fixed) {
+    pendingRxSize = fixedPacketLength;
+  } else {
+    uint8_t size = lora.readRXPacketL();
+    if (size > kMaxFrameLength) {
+      size = kMaxFrameLength;
+    }
+    pendingRxSize = size;
+  }
+
+  rxPayloadPending = true;
+}
+
+void Sx1280_Direct::fetchRxPayload() {
+  if (!rxPayloadPending) {
+    return;
+  }
+  rxPayloadPending = false;
 
   if (packetMode == SX1280_PacketMode::Limited) {
     uint8_t buffer[kMaxFrameLength + 1] = {0};
@@ -485,11 +512,7 @@ void Sx1280_Direct::readCompletedPacket() {
     return;
   }
 
-  uint8_t size = lora.readRXPacketL();
-  if (size > kMaxFrameLength) {
-    size = kMaxFrameLength;
-  }
-
+  const uint8_t size = static_cast<uint8_t>(pendingRxSize);
   uint8_t buffer[kMaxFrameLength] = {0};
   lora.startReadSXBuffer(kRxBufferAddress);
   lora.readBuffer(buffer, size);

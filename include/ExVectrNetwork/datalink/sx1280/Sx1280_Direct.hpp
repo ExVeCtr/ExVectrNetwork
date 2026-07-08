@@ -31,6 +31,17 @@ public:
   virtual int16_t getPacketSNR() const = 0;
   virtual network::DataPacket getRxPacket() const = 0;
   virtual uint32_t getRxPacketCount() const = 0;
+  /**
+   * @brief Fetches the completed RX packet's payload bytes from the radio's
+   * FIFO over SPI, populating what getRxPacket() returns. Deliberately split
+   * out from pull()/getRxPacketCount(): pull() only reads the cheap status
+   * (RSSI/SNR/length) needed to detect a completed packet and (for
+   * diversity) decide which radio's packet actually wins, so the
+   * comparatively expensive FIFO read only ever happens for the packet that
+   * will actually be used. Call once, after getRxPacketCount() has changed,
+   * before getRxPacket(). No-op if there is nothing pending.
+   */
+  virtual void fetchRxPayload() = 0;
 
   virtual bool setupTxPacket(const network::DataPacket &packet) = 0;
   virtual void startTx() = 0;
@@ -74,6 +85,7 @@ public:
   int16_t getPacketSNR() const override;
   network::DataPacket getRxPacket() const override;
   uint32_t getRxPacketCount() const override;
+  void fetchRxPayload() override;
 
   // --- Transmitting ---------------------------------------------
   bool setupTxPacket(const network::DataPacket &packet) override;
@@ -179,6 +191,13 @@ private:
   uint32_t rxPacketCount = 0;
   uint32_t txPacketCount = 0;
 
+  // True once readCompletedPacketStatus() has confirmed a good RX (RSSI/SNR/
+  // length read) but fetchRxPayload() hasn't yet pulled the payload bytes out
+  // of the radio's FIFO. pendingRxSize is the payload length to read once it
+  // is (from readRXPacketL() for Dynamic mode; already known otherwise).
+  bool rxPayloadPending = false;
+  size_t pendingRxSize = 0;
+
   // --- TX power settings -----------------------------------------------------
   int8_t txPower = 0;
   int8_t maxTxPower = 20;
@@ -218,7 +237,7 @@ private:
   void clearIrqFlags();
   void applyPacketParams();
   void prepareTxPacket(const uint8_t *data, size_t size);
-  void readCompletedPacket();
+  void readCompletedPacketStatus();
 };
 
 } // namespace VCTR::network::datalink
