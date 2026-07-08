@@ -5185,7 +5185,7 @@ float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
     }
   }
 
-  return nSymbol - 1;
+  return nSymbol;
 }
 
 float SX128XLT::calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz,

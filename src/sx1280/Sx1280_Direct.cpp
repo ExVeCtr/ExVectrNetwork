@@ -16,7 +16,17 @@ bool Sx1280_Direct::configureRadio() {
   lora.setBufferBaseAddress(kTxBufferAddress, kRxBufferAddress);
   lora.setPeriodBase(PERIODBASE_15_US);
   lora.setAutoFS(autoFSEnabled);
-  lora.setDioIrqParams(IRQ_RADIO_ALL, IRQ_RADIO_ALL, 0, 0);
+  // DIO1 mask: only fire the pin ISR on TX_DONE and RX_DONE. The IRQ mask
+  // stays IRQ_RADIO_ALL so preamble/header/CRC/timeout are still visible to
+  // fetchIrqFlags() via SPI polling. Routing everything to DIO1 would make
+  // the pin rise at the FIRST event of a reception (preamble detect) and
+  // stay high until cleared, so the ISR-captured timestamp would mark the
+  // preamble-detect instant -- or worse, a false preamble detect from noise
+  // earlier in the slot -- instead of a deterministic point of the packet.
+  // With only RX_DONE/TX_DONE routed, the DIO1 edge lands exactly at packet
+  // end, from which readCompletedPacketStatus() derives the true on-air
+  // start time. FHSS slot sync depends on this timestamp being exact.
+  lora.setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_RX_DONE), 0, 0);
   applyPacketParams();
   lora.clearIrqStatus(IRQ_RADIO_ALL);
   clearIrqFlags();
@@ -462,18 +472,29 @@ void Sx1280_Direct::readCompletedPacketStatus() {
   // diversity, only after comparing RSSI/SNR across radios) actually needs
   // this packet's data. See fetchRxPayload()'s and Sx1280_DirectI's doc
   // comments for why.
-  lastRxPacket.timestamp = lastRxTimestamp;
-
-  if (packetMode == SX1280_PacketMode::Limited ||
-      packetMode == SX1280_PacketMode::Fixed) {
+  size_t otaLen;
+  if (packetMode == SX1280_PacketMode::Limited) {
     pendingRxSize = fixedPacketLength;
+    otaLen = fixedPacketLength + 1; // 1-byte length prefix on air
+  } else if (packetMode == SX1280_PacketMode::Fixed) {
+    pendingRxSize = fixedPacketLength;
+    otaLen = fixedPacketLength;
   } else {
     uint8_t size = lora.readRXPacketL();
     if (size > kMaxFrameLength) {
       size = kMaxFrameLength;
     }
     pendingRxSize = size;
+    otaLen = size;
   }
+
+  // lastRxTimestamp is the DIO1 RX_DONE edge, i.e. the end of the packet.
+  // Subtract the deterministic time-on-air so the reported timestamp is the
+  // moment the packet started on air -- the TX side's slot boundary. FHSS
+  // uses this directly for slot synchronisation.
+  const int64_t timeOnAir = (int64_t)(
+      lora.getLoRaTimeOnAirMs((uint8_t)otaLen) * (float)Core::MILLISECONDS);
+  lastRxPacket.timestamp = lastRxTimestamp - timeOnAir;
 
   rxPayloadPending = true;
 }
