@@ -86,6 +86,13 @@ public:
   int16_t readPacketRSSI2();
   int16_t readPacketRSSI();
   int8_t readPacketSNR();
+  // Combined RSSI+SNR read: readPacketRSSI() and readPacketSNR() each issue
+  // their own RADIO_GET_PACKETSTATUS SPI command (readPacketRSSI() even
+  // calls readPacketSNR() internally *and* re-reads status itself), so
+  // calling both back-to-back triggers three redundant checkBusy()+SPI
+  // round trips for data that's all in a single 5-byte status response.
+  // This fetches the status once and derives both values from it.
+  void readPacketRSSISNR(int16_t &rssi, int8_t &snr);
   uint8_t readRXPacketL();
   void setRx(uint16_t timeout);
   void setRxContinuous();

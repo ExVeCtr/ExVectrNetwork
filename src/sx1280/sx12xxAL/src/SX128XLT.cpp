@@ -35,7 +35,8 @@ constexpr bool HIGH = true;
 
 inline void delay(uint32_t ms) {
   const int64_t start = Core::NowNs();
-  while (Core::NowNs() - start < static_cast<int64_t>(ms) * Core::MILLISECONDS) {
+  while (Core::NowNs() - start <
+         static_cast<int64_t>(ms) * Core::MILLISECONDS) {
   }
 }
 
@@ -1198,6 +1199,34 @@ int8_t SX128XLT::readPacketSNR() {
   }
 
   return snr;
+}
+
+void SX128XLT::readPacketRSSISNR(int16_t &rssi, int8_t &snr) {
+#ifdef SX128XDEBUG
+  Serial.println(F("readPacketRSSISNR()"));
+#endif
+
+  uint8_t status[5];
+  readCommand(RADIO_GET_PACKETSTATUS, status, 5);
+
+  if (status[1] < 128) {
+    snr = status[1] / 4;
+  } else {
+    snr = ((status[1] - 256) / 4);
+  }
+
+  rssi = 0; // so routine returns 0 if packet not LoRa or FLRC
+
+  if (savedPacketType == PACKET_TYPE_LORA) {
+    rssi = -status[0] / 2;
+    if (snr < 0) {
+      rssi = rssi + snr;
+    }
+  }
+
+  if (savedPacketType == PACKET_TYPE_FLRC) {
+    rssi = -status[1] / 2;
+  }
 }
 
 uint8_t SX128XLT::readRXPacketL() {

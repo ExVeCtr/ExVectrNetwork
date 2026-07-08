@@ -29,9 +29,27 @@ bool Sx1280_Direct::configureRadio() {
 }
 
 void Sx1280_Direct::startRx(int64_t timeout) {
+  const uint16_t clampedTimeout = clampRadioTimeout(timeout);
+
+  // If we're already listening (nothing consumed the RX window: no rxDone/
+  // txDone/timeout/error since we last armed it, and push() didn't just
+  // reconfigure the radio -- both of those paths leave `state` at something
+  // other than IdleReceive) with the same timeout, re-issuing setRx() would
+  // just be a redundant checkBusy()+SPI round trip; the radio hardware is
+  // already in the requested state. FHSS calls push()+startRx() on every
+  // non-TX slot regardless of whether anything actually changed, so on a
+  // quiet slot this was pure overhead -- and with two radios sharing one
+  // physical SPI bus in diversity mode, that overhead is doubled every RX
+  // slot, eating into the FHSS scheduling margin and increasing the
+  // missed-slot rate. Skip it when it's provably a no-op.
+  if (state == State::IdleReceive && clampedTimeout == lastRxTimeoutArmed) {
+    return;
+  }
+
   clearIrqFlags();
-  lora.setRx(clampRadioTimeout(timeout));
+  lora.setRx(clampedTimeout);
   state = State::IdleReceive;
+  lastRxTimeoutArmed = clampedTimeout;
 }
 
 int16_t Sx1280_Direct::getPacketRSSI() const { return receivedDataRSSI; }
@@ -171,9 +189,21 @@ void Sx1280_Direct::setIdle() {
 }
 
 void Sx1280_Direct::push(bool keepOscRunning) {
-  const bool needsRadioUpdate = state != State::Idle || modParamsChanged ||
-                                freqChanged || packetParamsChanged ||
-                                txPacketPending;
+  // Only force a standby/reconfigure round trip (setMode + re-check mod/freq/
+  // packet params) when something has actually changed. Deliberately does NOT
+  // gate on `state != State::Idle`: startRx() always leaves state at
+  // IdleReceive (never back to Idle), so that condition was true on every
+  // single non-TX slot -- forcing a needless setMode(STDBY) -> reconfigure ->
+  // (FHSS then calls startRx() right after) -> setRx() cycle every slot even
+  // when nothing needed updating. startRx() itself (called unconditionally by
+  // FHSS after push()) already re-arms the RX window every slot regardless,
+  // so no correctness is lost by skipping this when truly idle-receiving.
+  // This was cheap enough to not matter with one radio, but with two radios
+  // sharing a single physical SPI bus (see Sx1280Diversity / SX1280.cpp's
+  // shared `SPI` instance) it doubled real per-slot SPI bus time, tipping
+  // FHSS slot scheduling over the edge under diversity.
+  const bool needsRadioUpdate =
+      modParamsChanged || freqChanged || packetParamsChanged || txPacketPending;
 
   if (!needsRadioUpdate) {
     return;
@@ -416,8 +446,15 @@ void Sx1280_Direct::prepareTxPacket(const uint8_t *data, size_t size) {
 }
 
 void Sx1280_Direct::readCompletedPacket() {
-  receivedDataRSSI = lora.readPacketRSSI();
-  receivedDataSNR = lora.readPacketSNR();
+  // Single combined status read instead of separate readPacketRSSI() +
+  // readPacketSNR() calls -- see readPacketRSSISNR() for why (avoids 3
+  // redundant RADIO_GET_PACKETSTATUS SPI+checkBusy() round trips down to 1).
+  // This matters most in diversity mode, where two radios each pay this
+  // cost on nearly every successfully-received slot.
+  int8_t snr = 0;
+  lora.readPacketRSSISNR(receivedDataRSSI, snr);
+  receivedDataSNR = snr;
+
   lastRxPacket.timestamp = lastRxTimestamp;
 
   if (packetMode == SX1280_PacketMode::Limited) {

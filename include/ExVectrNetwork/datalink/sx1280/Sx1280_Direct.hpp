@@ -203,6 +203,13 @@ private:
 
   bool autoFSEnabled = false;
 
+  // Timeout value the radio was last actually armed with via a real setRx()
+  // SPI call. Used by startRx() to skip re-issuing setRx() when the radio is
+  // already listening (state == IdleReceive) with the same timeout, since
+  // that's a no-op on the hardware but costs a full checkBusy()+SPI round
+  // trip -- doubled per RX slot under diversity's two radios sharing one bus.
+  uint16_t lastRxTimeoutArmed = 0;
+
   // --- Private helpers -------------------------------------------------------
 
   size_t getMaxPayloadSize() const;
