@@ -45,6 +45,9 @@ public:
   virtual void setPacketMode(SX1280_PacketMode mode) = 0;
   virtual void setFixedPacketLength(uint8_t length) = 0;
   virtual void setPAdbm(uint8_t paDbm) = 0;
+  virtual void setAutoFS(bool enable) = 0;
+
+  virtual void setIdle() = 0;
 
   virtual void push(bool keepOscRunning = false) = 0;
   virtual void pull() = 0;
@@ -109,6 +112,9 @@ public:
 
   /// Sets the dB the external PA adds to the output power.
   void setPAdbm(uint8_t paDbm) override;
+  void setAutoFS(bool enable) override;
+
+  void setIdle() override;
 
   /**
    * @brief Apply any pending configuration changes (frequency, modulation,
@@ -194,6 +200,8 @@ private:
 
   // --- Channel ---------------------------------------------------------------
   uint8_t currentChannel = 0;
+
+  bool autoFSEnabled = false;
 
   // --- Private helpers -------------------------------------------------------
 

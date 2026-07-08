@@ -15,7 +15,7 @@ bool Sx1280_Direct::configureRadio() {
   lora.setHighSensitivity();
   lora.setBufferBaseAddress(kTxBufferAddress, kRxBufferAddress);
   lora.setPeriodBase(PERIODBASE_15_US);
-  lora.setAutoFS(false);
+  lora.setAutoFS(autoFSEnabled);
   lora.setDioIrqParams(IRQ_RADIO_ALL, IRQ_RADIO_ALL, 0, 0);
   applyPacketParams();
   lora.clearIrqStatus(IRQ_RADIO_ALL);
@@ -157,6 +157,18 @@ void Sx1280_Direct::setFixedPacketLength(uint8_t length) {
 }
 
 void Sx1280_Direct::setPAdbm(uint8_t paDbm) { paGain = paDbm; }
+
+void Sx1280_Direct::setAutoFS(bool enable) {
+  autoFSEnabled = enable;
+  if (isConfigured()) {
+    lora.setAutoFS(enable);
+  }
+}
+
+void Sx1280_Direct::setIdle() {
+  lora.setMode(MODE_STDBY_XOSC);
+  state = State::Idle;
+}
 
 void Sx1280_Direct::push(bool keepOscRunning) {
   const bool needsRadioUpdate = state != State::Idle || modParamsChanged ||
