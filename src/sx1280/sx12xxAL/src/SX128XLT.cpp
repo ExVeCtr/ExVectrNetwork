@@ -1179,6 +1179,10 @@ int16_t SX128XLT::readPacketRSSI() {
     rssi = -status[1] / 2;
   }
 
+  if (rssi < -127) {
+    rssi = -127; // limit to -127dBm
+  }
+
   return rssi;
 }
 
