@@ -1173,6 +1173,11 @@ int16_t SX128XLT::readPacketRSSI() {
     if (snr < 0) {
       rssi = rssi + snr;
     }
+    // The SNR compensation can push RSSI below -128 dBm at the sensitivity
+    // limit; clamp so downstream int8 telemetry fields can't wrap positive.
+    if (rssi < -127) {
+      rssi = -127;
+    }
   }
 
   if (savedPacketType == PACKET_TYPE_FLRC) {
@@ -1221,6 +1226,11 @@ void SX128XLT::readPacketRSSISNR(int16_t &rssi, int8_t &snr) {
     rssi = -status[0] / 2;
     if (snr < 0) {
       rssi = rssi + snr;
+    }
+    // The SNR compensation can push RSSI below -128 dBm at the sensitivity
+    // limit; clamp so downstream int8 telemetry fields can't wrap positive.
+    if (rssi < -127) {
+      rssi = -127;
     }
   }
 
