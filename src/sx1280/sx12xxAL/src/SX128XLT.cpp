@@ -5195,7 +5195,13 @@ float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
     }
   }
 
-  return nSymbol - 1;
+  // No "-1" term here: per DS.SX1280-1 Rev 3.3 section 7.4.4.1/7.4.4.2,
+  // N_symbol is exactly preamble + header-overhead + payload-symbols as
+  // computed above. Subtracting 1 undercounts total time-on-air by a full
+  // symbol duration -- harmless while this was unused, but this value is now
+  // subtracted from the RX_DONE timestamp to recover the packet start time
+  // for FHSS sync, so it needs to match the datasheet exactly.
+  return nSymbol;
 }
 
 float SX128XLT::calcLoRaTimeOnAirMs(uint8_t sf, uint32_t bandwidthHz,
