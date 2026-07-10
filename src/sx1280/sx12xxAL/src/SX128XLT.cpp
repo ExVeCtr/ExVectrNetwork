@@ -1173,14 +1173,15 @@ int16_t SX128XLT::readPacketRSSI() {
     if (snr < 0) {
       rssi = rssi + snr;
     }
+    // The SNR compensation can push RSSI below -128 dBm at the sensitivity
+    // limit; clamp so downstream int8 telemetry fields can't wrap positive.
+    if (rssi < -127) {
+      rssi = -127;
+    }
   }
 
   if (savedPacketType == PACKET_TYPE_FLRC) {
     rssi = -status[1] / 2;
-  }
-
-  if (rssi < -127) {
-    rssi = -127; // limit to -127dBm
   }
 
   return rssi;
@@ -1225,6 +1226,11 @@ void SX128XLT::readPacketRSSISNR(int16_t &rssi, int8_t &snr) {
     rssi = -status[0] / 2;
     if (snr < 0) {
       rssi = rssi + snr;
+    }
+    // The SNR compensation can push RSSI below -128 dBm at the sensitivity
+    // limit; clamp so downstream int8 telemetry fields can't wrap positive.
+    if (rssi < -127) {
+      rssi = -127;
     }
   }
 
@@ -5189,6 +5195,12 @@ float SX128XLT::calcLoRaSymbolCount(uint8_t sf, uint8_t cr,
     }
   }
 
+  // No "-1" term here: per DS.SX1280-1 Rev 3.3 section 7.4.4.1/7.4.4.2,
+  // N_symbol is exactly preamble + header-overhead + payload-symbols as
+  // computed above. Subtracting 1 undercounts total time-on-air by a full
+  // symbol duration -- harmless while this was unused, but this value is now
+  // subtracted from the RX_DONE timestamp to recover the packet start time
+  // for FHSS sync, so it needs to match the datasheet exactly.
   return nSymbol;
 }
 

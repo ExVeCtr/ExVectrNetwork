@@ -16,17 +16,16 @@ bool Sx1280_Direct::configureRadio() {
   lora.setBufferBaseAddress(kTxBufferAddress, kRxBufferAddress);
   lora.setPeriodBase(PERIODBASE_15_US);
   lora.setAutoFS(autoFSEnabled);
-  // DIO1 mask: only fire the pin ISR on TX_DONE and RX_DONE. The IRQ mask
-  // stays IRQ_RADIO_ALL so preamble/header/CRC/timeout are still visible to
-  // fetchIrqFlags() via SPI polling. Routing everything to DIO1 would make
-  // the pin rise at the FIRST event of a reception (preamble detect) and
-  // stay high until cleared, so the ISR-captured timestamp would mark the
-  // preamble-detect instant -- or worse, a false preamble detect from noise
-  // earlier in the slot -- instead of a deterministic point of the packet.
-  // With only RX_DONE/TX_DONE routed, the DIO1 edge lands exactly at packet
-  // end, from which readCompletedPacketStatus() derives the true on-air
-  // start time. FHSS slot sync depends on this timestamp being exact.
-  lora.setDioIrqParams(IRQ_RADIO_ALL, (IRQ_TX_DONE | IRQ_RX_DONE), 0, 0);
+  // DIO1 mask: only fire the pin ISR on RX_DONE. The IRQ mask stays
+  // IRQ_RADIO_ALL so preamble/header/CRC/timeout/TX_DONE are still visible
+  // to fetchIrqFlags() via SPI polling (pull() is called unconditionally
+  // every FHSS tick regardless of DIO1, so nothing is missed). TX_DONE is
+  // deliberately left off DIO1 too: pull() never reads a timestamp for it,
+  // and every flag other than RX_DONE ignores irqTrigTimestamp entirely, so
+  // routing them to the pin only risked stealing the "first edge" latch in
+  // notifyDio1Irq() from the one edge that's actually load-bearing -- the
+  // exact instant of RX_DONE, which FHSS slot sync depends on.
+  lora.setDioIrqParams(IRQ_RADIO_ALL, IRQ_RX_DONE, 0, 0);
   applyPacketParams();
   lora.clearIrqStatus(IRQ_RADIO_ALL);
   clearIrqFlags();
@@ -303,6 +302,14 @@ void Sx1280_Direct::notifyDio1Irq(int64_t timestamp, bool force) {
 
 void Sx1280_Direct::fetchIrqFlags() {
   int64_t irqTimestamp = irqTrigTimestamp;
+  if (irqTimestamp == 0 && dio1TimestampSource != nullptr) {
+    // The DIO1 edge may have fired after the main loop last transferred ISR
+    // captures but before this pull -- with RX_DONE-only on DIO1 the edge
+    // lands near the end of the slot, so this race is common. Drain the
+    // pending capture directly instead of falling back to NowNs() below,
+    // which would be late by the loop latency and jitter the FHSS sync.
+    irqTimestamp = dio1TimestampSource();
+  }
   if (irqTimestamp == 0) {
     irqTimestamp = Core::NowNs();
   }
@@ -488,12 +495,13 @@ void Sx1280_Direct::readCompletedPacketStatus() {
     otaLen = size;
   }
 
-  // lastRxTimestamp is the DIO1 RX_DONE edge, i.e. the end of the packet.
-  // Subtract the deterministic time-on-air so the reported timestamp is the
-  // moment the packet started on air -- the TX side's slot boundary. FHSS
-  // uses this directly for slot synchronisation.
-  const int64_t timeOnAir = (int64_t)(
-      lora.getLoRaTimeOnAirMs((uint8_t)otaLen) * (float)Core::MILLISECONDS);
+  // lastRxTimestamp is the DIO1 RX_DONE edge, i.e. the end of the packet
+  // (guaranteed exact now that DIO1 is masked to RX_DONE only -- see
+  // configureRadio()). FHSS::syncTimer() wants the packet START time (the
+  // TX-side slot boundary), so subtract the deterministic time-on-air.
+  const int64_t timeOnAir = static_cast<int64_t>(
+      lora.getLoRaTimeOnAirMs(static_cast<uint8_t>(otaLen)) *
+      static_cast<float>(Core::MILLISECONDS));
   lastRxPacket.timestamp = lastRxTimestamp - timeOnAir;
 
   rxPayloadPending = true;

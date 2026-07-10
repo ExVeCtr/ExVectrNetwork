@@ -62,6 +62,15 @@ public:
 
   virtual void push(bool keepOscRunning = false) = 0;
   virtual void pull() = 0;
+
+  /**
+   * @brief True while a reception is in progress: a preamble (or header) has
+   * been detected by pull() but the packet has not yet completed with
+   * RX_DONE, a CRC/header error, or a timeout. Lets callers with slot-based
+   * scheduling grant an in-flight packet a short grace window instead of
+   * aborting it by re-arming RX or hopping channel.
+   */
+  virtual bool isReceivingPacket() const = 0;
 };
 
 /**
@@ -139,9 +148,27 @@ public:
    */
   void pull() override;
 
+  bool isReceivingPacket() const override { return state == State::Receiving; }
+
   // --- Interrupt and flags ------------------------------
   void notifyDio1Irq(int64_t timestamp, bool force = false);
   void fetchIrqFlags();
+
+  /**
+   * @brief Registers a function that drains any not-yet-delivered DIO1 ISR
+   * capture for this radio and returns it as a system timestamp (ns), or 0
+   * if no edge is pending.
+   *
+   * fetchIrqFlags() queries this when it finds IRQ flags set but no
+   * timestamp latched via notifyDio1Irq(). Without it, an edge that fires
+   * between the main loop's interrupt transfer and this radio's pull() --
+   * a window that RX_DONE (end of packet, shortly before the FHSS slot
+   * wakeup) hits regularly -- would fall back to Core::NowNs(), injecting
+   * up to ~1 ms of scheduler-dependent error into the FHSS sync timestamp.
+   */
+  void setDio1TimestampSource(int64_t (*source)()) {
+    dio1TimestampSource = source;
+  }
 
   /// Returns true after configureRadio() has been called successfully.
   bool isConfigured() const { return state != State::Sleep; }
@@ -173,6 +200,7 @@ private:
   bool txPacketLoaded = false;
 
   // --- IRQ Flags--------------------------------------------
+  int64_t (*dio1TimestampSource)() = nullptr;
   int64_t irqTrigTimestamp = 0;
   bool preambleDetected = false;
   bool headerValid = false;
