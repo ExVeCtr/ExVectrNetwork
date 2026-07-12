@@ -256,6 +256,40 @@ void Sx1280_Direct::push(bool keepOscRunning) {
 }
 
 void Sx1280_Direct::pull() {
+  if (lora.checkAndClearBusyReset()) {
+    // The low-level driver hard-reset the chip after a BUSY timeout
+    // (SX128XLT::checkBusy()): every register is back at power-on defaults
+    // while our staged flags still say "configured", so push() would never
+    // reconfigure it. Rebuild the full configuration from the stored
+    // settings (configureRadio() reapplies frequency/modulation/packet
+    // params/DIO mask), otherwise this radio stays a zombie -- deaf, its
+    // transmissions undecodable -- while a diversity layer keeps selecting
+    // it for TX by its frozen last-known SNR, and each further command
+    // to it risks another ~90 ms timeout+reset stall (missed FHSS slots).
+    busyReinitPending = true;
+  }
+
+  if (busyReinitPending) {
+    // Rate-limit the recovery: on a genuinely wedged chip every SPI command
+    // (including configureRadio()'s own) burns the full ~90 ms
+    // timeout+reset again, so retrying on every pull would stall the FHSS
+    // scheduler continuously. Until a reconfigure succeeds the radio is
+    // unusable anyway, so skip pull entirely between attempts.
+    const int64_t now = Core::NowNs();
+    if (now - lastBusyReinitAttemptNs < 1 * Core::SECONDS) {
+      return;
+    }
+    lastBusyReinitAttemptNs = now;
+    if (configureRadio()) {
+      busyReinitPending = false;
+      // Drop the reset flag a failed-then-successful configureRadio() may
+      // have re-latched mid-way, so the next pull() doesn't restart the
+      // recovery cycle on a now-healthy radio.
+      lora.checkAndClearBusyReset();
+    }
+    return;
+  }
+
   fetchIrqFlags();
 
   if (txDone) {

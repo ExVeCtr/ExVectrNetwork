@@ -27,6 +27,23 @@ public:
   bool getDio1State();
 
   void checkBusy();
+
+  /**
+   * @brief Returns true (and clears the flag) if checkBusy() had to hard-reset
+   * the chip via resetDevice() after a BUSY timeout since the last call.
+   *
+   * After that reset every register is back at power-on defaults (frequency,
+   * modulation/packet params, DIO mask, buffer bases), but higher layers'
+   * staged-configuration state still says "configured" -- so without checking
+   * this and re-running the full configuration, the radio is left a zombie:
+   * SPI-responsive but deaf, transmitting undecodable garbage.
+   */
+  bool checkAndClearBusyReset() {
+    const bool was = _busyResetOccurred;
+    _busyResetOccurred = false;
+    return was;
+  }
+
   bool config();
   void readRegisters(uint16_t address, uint8_t *buffer, uint16_t size);
   uint8_t readRegister(uint16_t address);
@@ -300,6 +317,9 @@ private:
                      // during writeFloat() etc
   uint8_t _OperatingMode;    // current operating mode
   bool _rxtxpinmode = false; // set to true if RX and TX pin mode is used.
+  // checkBusy() hard-reset the chip after a BUSY timeout; see
+  // checkAndClearBusyReset().
+  bool _busyResetOccurred = false;
 
   uint8_t _Device;    // saved device type
   uint8_t _TXDonePin; // the pin that will indicate TX done

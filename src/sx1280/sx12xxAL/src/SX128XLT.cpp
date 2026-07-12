@@ -183,8 +183,13 @@ void SX128XLT::checkBusy() {
     if (Core::NowNs() - startmS > 20 * Core::MILLISECONDS) {
       LOG_MSG("ERROR - Busy Timeout!\n");
       resetDevice();
-      // setMode(MODE_STDBY_RC);
-      // config(); // re-run saved config
+      // The chip is now at power-on defaults but the caller's staged config
+      // state isn't -- flag it so the owning driver re-runs its full
+      // configuration (see checkAndClearBusyReset()). Left unconfigured, the
+      // radio is a zombie that neither receives nor transmits decodably,
+      // while every subsequent command risks another 20 ms + 70 ms
+      // timeout/reset stall.
+      _busyResetOccurred = true;
       break;
     }
   }

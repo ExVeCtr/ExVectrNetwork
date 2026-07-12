@@ -199,6 +199,10 @@ private:
   bool txPacketPending = false;
   bool txPacketLoaded = false;
 
+  // --- BUSY-timeout recovery (see pull()) -----------------
+  bool busyReinitPending = false;
+  int64_t lastBusyReinitAttemptNs = 0;
+
   // --- IRQ Flags--------------------------------------------
   int64_t (*dio1TimestampSource)() = nullptr;
   int64_t irqTrigTimestamp = 0;
